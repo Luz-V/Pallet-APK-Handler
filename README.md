@@ -1,7 +1,7 @@
 # Pallet APK Handler
 ## Small script collection for android package managment
 
-As there is virtually no free Android Mobile Devices Managment (MDM) tools for small non profits organisation at the moment, I decided to sharpen my own tools for backups, restore, listing and others operations on android packages. Theses batch/adb scripts are draft material for more advanced operation, but they are already operationnal for android application deployment on rooted devices with Neo-backup and AppManager backup files.
+As there is virtually no free Android Mobile Devices Managment (MDM) tools for small non profits organisation at the moment, I decided to sharpen my own tools for backups, restore, listing and others operations on android packages. Theses batch/adb scripts are draft material for more advanced operation, but they are already operationnal for android application deployment via windows/adb on rooted devices combined with [Neo-Backup](https://github.com/NeoApplications/Neo-Backup) and [AppManager](https://github.com/MuntashirAkon/AppManager) backup files.
 
 Help yourself, get chunks of theses as your convenience.
 
