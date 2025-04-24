@@ -3,6 +3,8 @@
 
 As there is virtually no free Android Mobile Managment Devices tools for small non profits organisation at the moment, I decided to sharpen my own tools for backups, restore, listing and others operations on android packages. Theses batch/adb scripts are draft material for more advanced operation, but they are already operationnal for android application deployment on rooted devices with Neo-backup and AppManager backup files.
 
+Help yourself, get chunks of theses as your convenience.
+
 ## Requirements
 - 7z with Zstandard (zstd) functions, [see here](https://github.com/mcmilk/7-Zip-zstd)
 - [aapt](https://stackoverflow.com/questions/28234671/what-is-aapt-android-asset-packaging-tool-and-how-does-it-work) for some specific parts
@@ -23,5 +25,3 @@ As there is virtually no free Android Mobile Managment Devices tools for small n
 - Function-based rewrite 
 - Package version checks when restoring package data
 - Neo-Backup advanced backup restoration
-
-Help yourself, get chunks of theses as your convenience.
