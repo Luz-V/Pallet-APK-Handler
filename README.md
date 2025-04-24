@@ -8,7 +8,7 @@ Help yourself, get chunks of theses as your convenience.
 ## Requirements
 - 7z with Zstandard (zstd) functions, [see here](https://github.com/mcmilk/7-Zip-zstd)
 - [aapt](https://stackoverflow.com/questions/28234671/what-is-aapt-android-asset-packaging-tool-and-how-does-it-work) for some specific parts
-- An android device with debug mode activated (preferably rooted for advanced backups)
+- An android device with debug mode activated (preferably rooted for data restore operations)
 - Windows : did only batch scripts for the moment, will rewrite them in bash eventually
 
 ## What already works
