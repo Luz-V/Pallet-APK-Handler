@@ -15,8 +15,8 @@ As there is virtually no free Android Mobile Managment Devices tools for small n
 - Extract user-installed packages installer archives (apk/apks)
 - Package name extraction from apk with aapt
 ### Batch install/uninstall and restore operations
-- Batch instal/uninstall packages based on a given package list or found apk(s) in a directory
-- Batch instal+restore backups for Neo-Backup and AppManager (unstable) backups files on a given package list or found backups in a directory 
+- Batch install/uninstall packages based on a given package list or found apk(s) in a directory
+- Batch install+restore backups for [Neo-Backup](https://github.com/NeoApplications/Neo-Backup) and [AppManager](https://github.com/MuntashirAkon/AppManager) backups files on a given package list or found backups in a directory 
 
 ## What is planned
 - Bash rewrite
