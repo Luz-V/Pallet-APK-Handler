@@ -1,6 +1,0 @@
-com.birds.chess
-vatefaireconjuguer.app
-com.digischool.superorthographe
-net.autoecole.app
-com.mileoDev.geography
-com.age.math.appspot

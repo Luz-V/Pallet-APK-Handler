@@ -1,0 +1,17 @@
+ai.fireflies.mobile
+org.mozilla.firefox
+lacaveauxenigmes.game.com
+com.omnisale.lalal.ai
+com.flutterflow.educool
+com.microsoft.office.outlook
+com.skype.raider
+md.obsidian
+com.vocalremover.unmix
+com.studysmarter
+com.ribeirop.dksplitter
+com.oasisfeng.island
+com.bulk.uninstall
+com.ghisler.tcplugins.LAN
+com.jumobile.manager.systemapp
+com.microsoft.copilot
+com.microsoft.office.excel
