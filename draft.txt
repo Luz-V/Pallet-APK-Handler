@@ -1,0 +1,81 @@
+ pah_events.py
+    on_scan_device_clicked
+    on_install_clicked
+    on_uninstall_clicked
+    on_backup_clicked
+    on_delete_clicked
+    on_export_clicked
+    on_selectall_toggle_clicked
+
+pah_callbacks.py
+    on_scan_failed
+    on_action_failed
+    update_scan_message
+    update_progress_dialog
+
+pah_data.py
+    on_scan_finished
+    mark_package_installed
+    mark_package_uninstalled
+    mark_package_saved
+    mark_package_deleted
+    check_pkg_version
+
+pah_ui_helpers.py
+    add_checkbox
+    is_row_colored
+    _color_row
+
+
+Devlist :
+
+FAIT
+- Tests apks => plutôt ok (erreurs un peu à l'arrache)
+- tri par check à réparer => ok
+=> Supprimer quand même un fichier introuvable => ok
+- Refacto en différents fichiers => ok
+- Update à implémenter => ok, mis de côté
+- Fichier de sauvegarde => ok
+- message erreur si no adb lors des install/backup => ok
+- message erreur si no scan android => ok
+- Barre de progression sur le nombre de programmes à installer/désinstaller/scanner/sauvegarder/supprimer
+- Normalisation des messages erreur => ok
+- tri décroissant en premier pour les colonnes installed/saved => boaf
+- Bouton Update : n'installe' que les applis déjà installées + en vert
+- Nettoyage des sélection à la fin des opérations
+- Installation : supprimer les anciennes versions non sauvegardées du tableau
+
+EN COURS :
+- Bouton annulation => Fait pour update, à faire pour install event et uninstall (et import et delete)
+=> Fait pour l'opération backup
+
+PREVU
+- Ajout d'une classe
+class PackageMap:
+    def __init__(self):
+        self.data = {}
+    def add(self, pkg, vcode, **info): ...
+    def update_from_table(self, table): ...
+    def sync_to_table(self, table): ...'
+- Réflexion sur la construction/recontruction du dictionnaire avec les données récupérées des tablettes
+- /!\ Refactorisation en QTableView plutôt que QTableWidget
+ (et disparition du dictionnaire du coup ? ou pas)
+- Passage du vcode en int directement (?)
+- Fonction de connection de worker standardisée :
+def connect_worker_signals(self, worker, operation_name):
+    worker.progress.connect(lambda msg: pahc.update_progress_dialog(self, msg))
+    worker.error.connect(lambda e: pahc.on_action_failed(self, operation_name, e))
+    worker.finished.connect(self.progress_dialog.close)
+    worker.interrupt.connect(self.interrupt)
+
+- Gestion d'une interruption de worker standardisé
+def on_action_interupted(self, worker):
+
+- Neobackup (root) : Fonctions de scan, select/unselect, install, restore, delete (android) + import PC, delete (PC)
+- Renommage de la mini appli android
+- Update sur Github/codeberg
+- /!\ Script installation install.sh:
+     1 : install python3, pip, venv
+     2 : venv: pip install ...
+     3 : run source .venv/bin/activate ; python3 pah_main.py
+- Création d'un exécutable
