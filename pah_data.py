@@ -1,5 +1,6 @@
 import logging
 import json
+
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Dict, Tuple, Optional
@@ -44,7 +45,13 @@ class PackageMap:
         """Récupère les infos d'un package."""
         key = (pkg, int(vcode))
         return self._data.get(key)
-    
+
+    def set_check(self, pkg: str, vcode: str, is_checked: bool ) -> None :
+        """ Input check state for a given package."""
+        key = (pkg, int(vcode))
+        found_package = self._data.get(key)
+        found_package.checked = is_checked
+
     def remove(self, pkg: str, vcode: str) -> bool:
         """Supprime un package. Retourne True si supprimé."""
         key = (pkg, int(vcode))
@@ -227,3 +234,117 @@ class PackageMap:
 
         for pkg, vcode_int in to_remove:
             self.remove(pkg, str(vcode_int))
+
+def map_apk_files_to_packages(package_map, apk_dir: Path, files_to_hash: list[Path]) -> Dict[str, Tuple[str, str, str]]:
+    """Map les fichiers APK vers les packages avec fallback hash.
+
+    Args:
+        package_map: Instance de PackageMap
+        apk_dir: Répertoire contenant les APK
+        files_to_hash: liste des fichiers qui nécessitent un hash
+
+    Returns:
+        Dict: {filename: (label, pkg, vcode)}
+    """
+    mapping = {}
+    hash_to_filename = {}
+
+    # Hasher uniquement les fichiers inconnus
+    for apk_file in files_to_hash:
+        file_hash = pahu.get_fast_apk_hash(apk_file)
+        if file_hash:
+            hash_to_filename[file_hash] = apk_file.name
+
+    # Mapper tous les fichiers connus ou hashés
+    for (pkg, vcode_int), info in package_map.get_all_packages().items():
+        if not info.local:
+            continue
+
+        vcode_str = str(vcode_int)
+        expected_filename = f"{pkg}_{vcode_str}.apk"
+
+        # 1) Nom exact sauvegardé
+        if info.file_name and (apk_dir / info.file_name).exists():
+            mapping[info.file_name] = (info.label, pkg, vcode_str)
+            continue
+
+        # 2) Nom attendu
+        if (apk_dir / expected_filename).exists():
+            mapping[expected_filename] = (info.label, pkg, vcode_str)
+            continue
+
+        # 3) Fallback hash
+        if info.file_hash and info.file_hash in hash_to_filename:
+            filename = hash_to_filename[info.file_hash]
+            mapping[filename] = (info.label, pkg, vcode_str)
+            logging.info(f"Found renamed APK: {filename} -> {pkg} v{vcode_str}")
+
+    return mapping
+
+
+# array building
+def on_scan_finished(main_window, scan_result):
+    """
+    Traite le résultat d'un scan Android/local et met à jour PackageMap + table.
+    """
+    # Close existing dialog
+    if getattr(main_window, "progress_dialog", None):
+        main_window.progress_dialog.close()
+        main_window.progress_dialog = None
+
+    pkg_map = main_window.package_map
+
+    # Comparing scan_result with existing PackageMap
+    # scan_result: dict or PackageMap with found packages
+    if hasattr(scan_result, "get_all_packages"):
+        scanned_items = scan_result.get_all_packages().items()
+    else:
+        scanned_items = scan_result.items()
+
+    for entry in scanned_items:
+        if isinstance(entry[0], tuple):
+            pkg, vcode_int = entry[0]
+            info = entry[1]
+            vcode_str = str(vcode_int)
+        else:
+            # Ancien dict
+            (pkg, vcode_str), info = entry
+
+        # Vérifier si package existe déjà dans PackageMap
+        existing = pkg_map.find_by_filename(info.file_name) or pkg_map.find_by_hash(info.file_hash)
+        if existing:
+            # Si trouvé dans PackageMap, mettre à jour les flags
+            ex_pkg, ex_vcode = existing
+            ex_info = pkg_map.get(ex_pkg, str(ex_vcode))
+            if info.android:
+                ex_info.android = True
+            if info.local:
+                ex_info.local = True
+        else:
+            # add new entries to PackageMap
+            pkg_map.add(
+                pkg,
+                vcode_str,
+                label=getattr(info, "label", info.get("label", pkg)),
+                android=getattr(info, "android", info.get("android", False)),
+                local=getattr(info, "local", info.get("local", False)),
+                checked=getattr(info, "checked", info.get("checked", False)),
+                file_name=getattr(info, "file_name", info.get("file_name", "")),
+                file_hash=getattr(info, "file_hash", info.get("file_hash", "")),
+            )
+
+    # Delete orphans packages
+    to_remove = [
+        (pkg, vcode_int)
+        for (pkg, vcode_int), info in pkg_map.get_all_packages().items()
+        if not info.android and not info.local
+    ]
+    for pkg, vcode_int in to_remove:
+        pkg_map.remove(pkg, str(vcode_int))
+
+    # Refresh table
+    main_window.table_adapter.refresh()
+
+    # Save
+    save_file = pkg_map.get_save_file_path()
+    pkg_map.save_to_file(save_file)

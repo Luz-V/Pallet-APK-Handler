@@ -4,73 +4,14 @@ from PyQt5.QtGui import QColor
 from collections import defaultdict
 import pah_data as pahd
 
-# array building
-def on_scan_finished(main_window, scan_result):
-    """
-    Traite le résultat d'un scan Android/local et met à jour PackageMap + table.
-    """
-    # 0️⃣ Fermer le progress dialog si existant
-    if getattr(main_window, "progress_dialog", None):
-        main_window.progress_dialog.close()
-        main_window.progress_dialog = None
 
-    pkg_map = main_window.package_map
-
-    # 1️⃣ Reconcilier scan_result avec PackageMap existant
-    # scan_result: dict ou PackageMap avec packages trouvés
-    if hasattr(scan_result, "get_all_packages"):
-        scanned_items = scan_result.get_all_packages().items()
-    else:
-        scanned_items = scan_result.items()
-
-    for entry in scanned_items:
-        if isinstance(entry[0], tuple):
-            pkg, vcode_int = entry[0]
-            info = entry[1]
-            vcode_str = str(vcode_int)
-        else:
-            # Ancien dict
-            (pkg, vcode_str), info = entry
-
-        # Vérifier si package existe déjà dans PackageMap
-        existing = pkg_map.find_by_filename(info.file_name) or pkg_map.find_by_hash(info.file_hash)
-        if existing:
-            # Si trouvé dans PackageMap, mettre à jour les flags
-            ex_pkg, ex_vcode = existing
-            ex_info = pkg_map.get(ex_pkg, str(ex_vcode))
-            if info.android:
-                ex_info.android = True
-            if info.local:
-                ex_info.local = True
-        else:
-            # Nouvelle entrée
-            pkg_map.add(
-                pkg,
-                vcode_str,
-                label=getattr(info, "label", info.get("label", pkg)),
-                android=getattr(info, "android", info.get("android", False)),
-                local=getattr(info, "local", info.get("local", False)),
-                checked=getattr(info, "checked", info.get("checked", False)),
-                file_name=getattr(info, "file_name", info.get("file_name", "")),
-                file_hash=getattr(info, "file_hash", info.get("file_hash", "")),
-            )
-
-    # 2️⃣ Supprimer les packages "orphans" (ni installés, ni sauvegardés)
-    to_remove = [
-        (pkg, vcode_int)
-        for (pkg, vcode_int), info in pkg_map.get_all_packages().items()
-        if not info.android and not info.local
-    ]
-    for pkg, vcode_int in to_remove:
-        pkg_map.remove(pkg, str(vcode_int))
-
-    # 3️⃣ Rafraîchissement unique de la table
-    main_window.table_adapter.refresh()
-
-    # 4️⃣ Sauvegarde
-    save_file = pkg_map.get_save_file_path()
-    pkg_map.save_to_file(save_file)
-
+# A INVESTIGUER
+def clear_selection(main_window):
+    try:
+        import pah_events
+        pah_events.clear_selection(main_window)
+    except Exception:
+        pass
 
 
 class PackageTableAdapter:
@@ -161,8 +102,7 @@ class PackageTableAdapter:
         def on_state_changed(state: int):
             is_checked = (state == Qt.Checked)
             pkg, vcode = pkg_key
-            info = self.pkg_map.get(pkg, vcode)
-            self.pkg_map.set_checked(pkg, vcode, is_checked)
+            self.pkg_map.set_check(pkg, vcode, is_checked)
             sort_item.setText("1" if is_checked else "0")
             sort_item.setData(Qt.UserRole, is_checked)
 
@@ -201,12 +141,15 @@ class PackageTableAdapter:
     def items(self):
         return self._data.items()
 
+    # NOT USED
+    # TO INVESTIGATE
     def set_checked(self, pkg: str, vcode: str, checked: bool):
         info = self.get(pkg, vcode)
         if info and info.checked != checked:
             info.checked = checked
             self._dirty.add((pkg, int(vcode)))
 
+    # NOT USED
     def find_row(self, pkg: str, vcode: str) -> int:
         """Retourne la ligne correspondant à pkg + version, -1 si non trouvé."""
         for row in range(self.table.rowCount()):
@@ -216,12 +159,3 @@ class PackageTableAdapter:
                 if pkg_item.text().strip() == pkg and vcode_item.text().strip() == vcode:
                     return row
         return -1
-
-    def remove_orphans(self):
-        to_remove = [
-            (pkg, vcode)
-            for (pkg, vcode), info in self._data.items()
-            if not info.android and not info.local
-        ]
-        for pkg, vcode in to_remove:
-            self.remove(pkg, str(vcode))

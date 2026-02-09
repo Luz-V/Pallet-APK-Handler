@@ -1,0 +1,63 @@
+com.birds.chess 213 Échecs
+vatefaireconjuguer.app 25 Conjugaison
+com.digischool.superorthographe 54 Orthographe
+fr.jeuxopla.kosmopolit 62025 kosmopolit FR
+net.autoecole.app 151 Stych
+com.sp.protector.free 253 AppLock
+com.mileoDev.geography 763 StudyGe
+com.age.math.appspot 52 Math - Quiz Game
+com.ghisler.android.TotalCommander 1463 Total Commander
+com.codeenpoche 91 Code en poche
+org.geogebra.android.g3d 91132 Calculatrice 3D
+app.cabuu.vokabeltrainer 564 cabuu
+ru.zdevs.zarchiver 101035 ZArchiver
+com.machiav3lli.backup 8325 Neo Backup
+com.openai.chatgpt 2602730 ChatGPT
+math.puzzle.games.crossmath.number.puzzles.free 26012875 Cross Math
+com.gitlab.mudlej.MjPdfReader 56 MJ PDF
+org.hempuli.baba 536 Baba Is You
+com.astepanov.mobile.mindmathtricks 472 Calcul Mental & Arithmétique
+livio.pack.lang.en_US 951 Anglais
+livio.pack.lang.fr_FR 950 Français
+com.secuso.privacyFriendlyCodeScanner 100 QR Scanner
+org.localsend.localsend_app 543 LocalSend
+com.ghisler.tcplugins.LAN 101 TotalCmd-LAN (partages Windows)
+com.vedasapps.flashcards 1750757912 Noji
+org.readera 2250 ReadEra
+com.psp.brainmindgames 96 Brain Training - Logic Puzzles
+fr.twentynine.keepon 26 KeepOn
+com.motsflechesfrancais 181 Mots Fléchés Français
+com.adel.adibou 487 Adibou
+com.IndexEducation.Pronote 212 PRONOTE
+ru.cherkasov.riddles 156 Riddles
+com.google.android.contactkeys 13285 Android System Key Verifier
+org.geogebra.android.geometry 91130 Géométrie
+com.age.europe.appspot 87 Europe Geography
+com.adel.wiloki 636 Wiloki
+io.github.muntashirakon.AppManager 430 App Manager
+com.topjohnwu.magisk 29000 Magisk
+de.knowunity.app 130887144 Knowunity
+org.geogebra.android 91130 Calc Graphique
+air.com.multimaths.DefiTables 2000090 Défi Tables
+com.nutomic.syncthingandroid 4384 Syncthing
+org.geogebra.android.calculator.suite 91132 GeoGebra
+org.mozilla.firefox 2016140255 Firefox
+com.romot 296 romot
+tv.arte.plus7 214402472 ARTE
+com.BlackGames.MathRiddles 55 Math Riddles
+com.david.android.languageswitch 1261 Beelinguapp
+com.anhlt.frestranslator 10 Français - Espagnol Traducteur
+air.com.permisecole.peandrophone 86009001 PermisEcole
+org.bromite.bromite 1671415660 Bromite
+com.kkk.english_words 1106 Livango
+com.giga.pc3apic 12 Physique chimie 3APIC
+me.mycake 306040201 Cake
+com.frostnerd.dnschanger 125 DnsChanger
+com.solocode.anton 114021 ANTON
+org.geogebra.android.cascalc 91132 Calculatrice Formelle
+biz.obake.team.touchprotector 180 Touch Protector
+com.digischool.education.community 72 Education
+com.envoituresimone.app 11410000 En Voiture Simone
+no.mobitroll.kahoot.android 3025 Kahoot!
+com.pah.miniapp 1 miniapp
+com.fanatee.cody 400 CodyCross

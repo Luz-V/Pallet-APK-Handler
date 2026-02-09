@@ -1,14 +1,21 @@
+import pah_logger
 import logging
+import csv
+import platform
+import subprocess
 
 from PyQt5 import QtWidgets, uic
 from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QKeySequence
-from PyQt5.QtWidgets import QCheckBox, QHeaderView, QMainWindow, QApplication, QShortcut
+from PyQt5.QtWidgets import QCheckBox, QHeaderView, QMainWindow, QApplication, QShortcut, QFileDialog
 from functools import partial
 
-import pah_events as pahev
+import pah_scan
+import pah_install
+import pah_import
 import pah_data as pahd
 import pah_viewer as pahvw
+import pah_callbacks as pahc
 
 class MainWindow(QMainWindow):
 
@@ -43,24 +50,24 @@ class MainWindow(QMainWindow):
         self.init_main_tablewidget()
 
         # --- Boutons ---
-        self.pushButton_Scan.clicked.connect(lambda: pahev.on_scan_device_clicked(self))
-        self.pushButton_Downgrade.clicked.connect(lambda: pahev.on_downgrade_clicked(self))
-        self.pushButton_sel_all.clicked.connect(lambda: pahev.on_selectall_toggle_clicked(self))
-        self.pushButton_Install.clicked.connect(lambda: pahev.on_install_clicked(self))
-        self.pushButton_Keep_only.clicked.connect(lambda: pahev.on_uninstall_clicked(self, invert=True))
-        self.pushButton_Uninstall.clicked.connect(lambda: pahev.on_uninstall_clicked(self))
-        self.pushButton_Backup.clicked.connect(lambda: pahev.on_backup_clicked(self))
-        self.pushButton_Delete.clicked.connect(lambda: pahev.on_delete_clicked(self))
-        self.pushButton_Explore_Apk.clicked.connect(lambda: pahev.on_explore_apk_clicked(self))
-        self.pushButton_Export.clicked.connect(lambda: pahev.on_export_clicked(self))
-        self.pushButton_Update.clicked.connect(lambda: pahev.on_update_clicked(self))
+        self.pushButton_Scan.clicked.connect(lambda: pah_scan.on_scan_device_clicked(self))
+        self.pushButton_Downgrade.clicked.connect(lambda: pah_install.on_downgrade_clicked(self))
+        self.pushButton_sel_all.clicked.connect(lambda: self.on_selectall_toggle_clicked())
+        self.pushButton_Install.clicked.connect(lambda: pah_install.on_install_clicked(self))
+        self.pushButton_Keep_only.clicked.connect(lambda: pah_install.on_uninstall_clicked(self, invert=True))
+        self.pushButton_Uninstall.clicked.connect(lambda: pah_install.on_uninstall_clicked(self))
+        self.pushButton_Backup.clicked.connect(lambda: pah_import.on_backup_clicked(self))
+        self.pushButton_Delete.clicked.connect(lambda: pah_import.on_delete_clicked(self))
+        self.pushButton_Explore_Apk.clicked.connect(lambda: self.on_explore_apk_clicked())
+        self.pushButton_Export.clicked.connect(lambda: self.on_export_clicked())
+        self.pushButton_Update.clicked.connect(lambda: pah_install.on_update_clicked(self))
 
         # --- Menus ---
         self.actionRescan_android.triggered.connect(
-            partial(pahev.on_scan_device_clicked, self, scan_android=True, scan_local=False)
+            partial(pah_scan.on_scan_device_clicked, self, scan_android=True, scan_local=False)
         )
         self.actionRescan_backups.triggered.connect(
-            partial(pahev.on_scan_device_clicked, self, scan_android=False, scan_local=True)
+            partial(pah_scan.on_scan_device_clicked, self, scan_android=False, scan_local=True)
         )
         self.actionClose.triggered.connect(lambda: self.close_window())
 
@@ -78,7 +85,7 @@ class MainWindow(QMainWindow):
         # --- Scan initial intelligent ---
         QTimer.singleShot(
             0,
-            lambda: pahev.on_scan_device_clicked(
+            lambda: pah_scan.on_scan_device_clicked(
                 self,
                 scan_android=True,
                 scan_local=True,
@@ -169,6 +176,82 @@ class MainWindow(QMainWindow):
         self.package_map.save_to_file(save_file)
         
         self.close()
+
+    def on_selectall_toggle_clicked(self):
+        main_table = self.tableWidget_2
+        row_count = main_table.rowCount()
+
+        # Check if all rows are checked
+        all_checked = all(
+            (checkbox := main_table.cellWidget(row, 5).findChild(QCheckBox)).isChecked()
+            for row in range(row_count)
+            if main_table.cellWidget(row, 5)
+        )
+
+        # If so, uncheck all, else check all
+        new_state = not all_checked
+        for row in range(row_count):
+            checkbox_widget = main_table.cellWidget(row, 5)
+            if checkbox_widget:
+                checkbox = checkbox_widget.findChild(QCheckBox)
+                if checkbox:
+                    checkbox.setChecked(new_state)
+        if not new_state: 
+            logging.debug(f"All values unselected")
+        else: 
+            logging.debug(f"All values selected")
+
+    def on_export_clicked(self):
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export table (CSV)",
+            "",
+            "CSV Files (*.csv);;All files (*)",
+            options=options
+        )
+        if not file_path:
+            return  # User canceled
+
+        if not file_path.lower().endswith('.csv'):
+            file_path += '.csv'
+
+        try:
+            with open(file_path, mode='w', newline='', encoding='utf-8') as file:
+                writer = csv.writer(file)
+                # Header
+                writer.writerow(["Label", "Package", "Version", "Android", "Local"])
+                # Body
+                for (pkg, vcode_int), info in self.package_map.get_all_packages().items():
+                    vcode = str(vcode_int)
+                    label = info.label
+                    android = "✓" if info.android else ""
+                    local = "✓" if info.local else ""
+                    writer.writerow([label, pkg, vcode, android, local])
+            logging.info(f"Export CSV succeeded : {file_path}")
+        except Exception as e:
+            logging.error(f"\nError during CSV export:\n{e}")
+
+    def on_explore_apk_clicked(self):
+        from pathlib import Path
+        dir_path = Path(__file__).parent / 'extracted_apks'
+        if not dir_path:
+            logging.error(f"Missing Apk(s) folder {dir_path}\nAttempting creation, please verify writing rights")
+            dir_path.mkdir(parents=True, exist_ok=True)
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(['start', '', dir_path], shell=True)
+            elif platform.system() == "Linux":
+                subprocess.run(['xdg-open', dir_path])
+            elif platform.system() == "Darwin":  # macOS
+                subprocess.run(['open', dir_path])
+            else:
+                pahc.on_action_failed(self,"Explore","Unsupported file system.")
+                return 2
+        except Exception as errmsg:
+            pahc.on_action_failed(self, "Explore", errmsg)
+            return 1
+        return 0
 
 
 app = QApplication([])
