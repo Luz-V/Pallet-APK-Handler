@@ -1,4 +1,5 @@
 __pycache__/
+.venv/
 /extracted_apks/android_extracted_list.txt
 /extracted_apks/*/
 /extracted_apks/*.apks

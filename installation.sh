@@ -24,6 +24,7 @@ install_system_packages() {
     apt-get update
 
     apt-get install -y \
+        adb \
         python3 \
         python3-venv \
         python3-pip \
