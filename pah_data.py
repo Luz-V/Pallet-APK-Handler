@@ -5,6 +5,8 @@ from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Dict, Tuple, Optional
 
+import pah_utils as pahu
+
 
 @dataclass
 class PackageInfo:
@@ -16,14 +18,12 @@ class PackageInfo:
     file_hash: str = ""  # Hash rapide pour identification fallback
     file_name: str = ""  # Nom de fichier local associé
 
-
 class PackageMap:
     """Gestionnaire centralisé des données de packages.
-    
     Remplace le dictionnaire _pkg_map avec une interface plus propre
     et prépare la migration vers QTableView.
     """
-    
+
     def __init__(self):
         self._data: Dict[Tuple[str, int], PackageInfo] = {}
         self._dirty: set[Tuple[str, int]] = set()  # Track modifications
@@ -40,16 +40,18 @@ class PackageMap:
                 elif hasattr(self._data[key], field):
                     setattr(self._data[key], field, value)
         self._dirty.add(key)
-    
+
     def get(self, pkg: str, vcode: str) -> Optional[PackageInfo]:
         """Récupère les infos d'un package."""
         key = (pkg, int(vcode))
         return self._data.get(key)
 
-    def set_check(self, pkg: str, vcode: str, is_checked: bool ) -> None :
-        """ Input check state for a given package."""
+    def set_check(self, pkg: str, vcode: str, is_checked: bool) -> None:
         key = (pkg, int(vcode))
         found_package = self._data.get(key)
+        if not found_package:
+            logging.warning(f"set_check: package not found {pkg} {vcode}")
+            return
         found_package.checked = is_checked
 
     def remove(self, pkg: str, vcode: str) -> bool:
@@ -60,31 +62,28 @@ class PackageMap:
             self._dirty.discard(key)
             return True
         return False
-    
+
     def exists(self, pkg: str, vcode: str) -> bool:
         """Vérifie l'existence d'un package."""
         key = (pkg, int(vcode))
         return key in self._data
-    
+
     def find_by_hash(self, file_hash: str) -> Optional[Tuple[str, int]]:
         """Trouve un package par son hash de fichier.
-        
         Args:
             file_hash: Hash du fichier APK
-            
         Returns:
             Tuple[str, int] ou None: (package_name, version_code) si trouvé
         """
         if not file_hash:
             return None
-            
+
         for (pkg, vcode_int), info in self._data.items():
             if info.file_hash == file_hash:
                 return (pkg, vcode_int)
         return None
 
     def find_by_filename(self, file_name: str) -> Optional[Tuple[str, int]]:
-        """Trouve un package par son nom de fichier local."""
         if not file_name:
             return None
 
@@ -92,7 +91,7 @@ class PackageMap:
             if info.file_name == file_name:
                 return (pkg, vcode_int)
         return None
-    
+
     def update_file_hash(self, pkg: str, vcode: str, file_hash: str) -> None:
         """Met à jour le hash de fichier pour un package."""
         info = self.get(pkg, vcode)
@@ -106,28 +105,28 @@ class PackageMap:
         if info:
             info.file_name = file_name
             self._dirty.add((pkg, int(vcode)))
-    
+
     def get_all_packages(self) -> Dict[Tuple[str, int], PackageInfo]:
-        """Retourne tous les packages."""
+        """Retourne une copie des packages."""
         return self._data.copy()
-    
+
     def clear_dirty(self) -> None:
         """Marque toutes les entrées comme synchronisées."""
         self._dirty.clear()
-    
+
     def is_dirty(self, pkg: str, vcode: str) -> bool:
         """Vérifie si une entrée a été modifiée."""
         key = (pkg, int(vcode))
         return key in self._dirty
-    
+
     def clear(self) -> None:
         """Vide toutes les données."""
         self._data.clear()
         self._dirty.clear()
-    
+
     def save_to_file(self, file_path: Path) -> None:
         """Sauvegarde PackageMap dans un fichier JSON.
-        
+
         Args:
             file_path: Chemin du fichier de sauvegarde
         """
@@ -138,97 +137,110 @@ class PackageMap:
             for (pkg, vcode_int), info in self._data.items():
                 key = f"{pkg}#{vcode_int}"  # Séparateur unique
                 serializable_data[key] = asdict(info)
-            
+
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(serializable_data, f, indent=2, ensure_ascii=False)
-            
+
             logging.info(f"PackageMap saved to {file_path}")
-            
+
         except Exception as e:
             logging.error(f"Failed to save PackageMap: {e}")
-    
+
     def load_from_file(self, file_path: Path) -> int:
         """Charge PackageMap depuis un fichier JSON.
-        
+
         Args:
             file_path: Chemin du fichier à charger
-            
+
         Returns:
             int: Nombre d'entrées chargées
         """
         if not file_path.exists():
             logging.info(f"PackageMap file {file_path} not found, starting fresh")
             return 0
-        
+
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 serializable_data = json.load(f)
-            
+
             loaded_count = 0
             for key, info_dict in serializable_data.items():
                 # Reconvertir les clés string en tuple
                 try:
                     pkg, vcode_str = key.split('#', 1)
                     vcode_int = int(vcode_str)
-                    
+
                     self._data[(pkg, vcode_int)] = PackageInfo(**info_dict)
                     loaded_count += 1
                 except Exception as e:
                     logging.warning(f"Invalid entry {key}: {e}")
                     continue
-            
+
             logging.info(f"PackageMap loaded {loaded_count} entries from {file_path}")
             return loaded_count
-            
+
         except Exception as e:
             logging.error(f"Failed to load PackageMap: {e}")
             return 0
-    
+
     def get_save_file_path(self) -> Path:
         """Retourne le chemin par défaut du fichier de sauvegarde."""
         return Path(__file__).parent / "extracted_apks" / "packagemap.json"
 
     def rebuild_from_scan(self, scan_result) -> None:
         """
-        Reconstruit le PackageMap depuis un résultat de scan.
-
-        Args:
-            scan_result: PackageMap ou dict
+        Merge le scan dans le PackageMap existant
+        SANS détruire le cache local (file_hash, file_name).
         """
-        self.clear()  # vider tout d’abord
 
         if hasattr(scan_result, "get_all_packages"):
-            # scan_result est un PackageMap
-            for (pkg, vcode_int), info in scan_result.get_all_packages().items():
+            scanned_items = scan_result.get_all_packages().items()
+        else:
+            scanned_items = scan_result.items()
+
+        # Reset UNIQUEMENT android (source volatile)
+        for info in self._data.values():
+            info.android = False
+
+        for (pkg, vcode_int), info in scanned_items:
+            vcode_str = str(vcode_int)
+
+            existing = self.get(pkg, vcode_str)
+
+            if existing:
+                existing.android = info.android
+                existing.local = info.local
+
+                if info.label and not existing.label:
+                    existing.label = info.label
+
+                if not existing.file_hash and info.file_hash:
+                    existing.file_hash = info.file_hash
+
+                if not existing.file_name and info.file_name:
+                    existing.file_name = info.file_name
+
+            else:
+                # Nouvelle entrée
                 self.add(
                     pkg,
-                    str(vcode_int),
+                    vcode_str,
                     label=info.label,
                     android=info.android,
                     local=info.local,
-                    checked=info.checked,
+                    checked=False,
                     file_hash=info.file_hash,
                     file_name=info.file_name,
-                )
-        else:
-            # compat dict
-            for (pkg, vcode), info in scan_result.items():
-                self.add(
-                    pkg,
-                    vcode,
-                    label=info["label"],
-                    android=info["android"],
-                    local=info["local"],
-                    checked=info.get("checked", False),
                 )
 
     def remove_orphans(self) -> None:
         """
-        Supprime tous les packages qui ne sont ni installés ni sauvegardés.
+        Supprime uniquement les entrées réellement mortes :
+        ni installées, ni présentes localement.
         """
         to_remove = [
             (pkg, vcode_int)
-            for (pkg, vcode_int), info in self.get_all_packages().items()
+            for (pkg, vcode_int), info in self._data.items()
             if not info.android and not info.local
         ]
 
@@ -281,70 +293,20 @@ def map_apk_files_to_packages(package_map, apk_dir: Path, files_to_hash: list[Pa
 
     return mapping
 
-
 # array building
 def on_scan_finished(main_window, scan_result):
-    """
-    Traite le résultat d'un scan Android/local et met à jour PackageMap + table.
-    """
-    # Close existing dialog
     if getattr(main_window, "progress_dialog", None):
         main_window.progress_dialog.close()
         main_window.progress_dialog = None
 
-    pkg_map = main_window.package_map
+    # 🔥 remplace complètement le modèle
+    main_window.package_map = scan_result
+    main_window.table_adapter.pkg_map = main_window.package_map
 
-    # Comparing scan_result with existing PackageMap
-    # scan_result: dict or PackageMap with found packages
-    if hasattr(scan_result, "get_all_packages"):
-        scanned_items = scan_result.get_all_packages().items()
-    else:
-        scanned_items = scan_result.items()
-
-    for entry in scanned_items:
-        if isinstance(entry[0], tuple):
-            pkg, vcode_int = entry[0]
-            info = entry[1]
-            vcode_str = str(vcode_int)
-        else:
-            # Ancien dict
-            (pkg, vcode_str), info = entry
-
-        # Vérifier si package existe déjà dans PackageMap
-        existing = pkg_map.find_by_filename(info.file_name) or pkg_map.find_by_hash(info.file_hash)
-        if existing:
-            # Si trouvé dans PackageMap, mettre à jour les flags
-            ex_pkg, ex_vcode = existing
-            ex_info = pkg_map.get(ex_pkg, str(ex_vcode))
-            if info.android:
-                ex_info.android = True
-            if info.local:
-                ex_info.local = True
-        else:
-            # add new entries to PackageMap
-            pkg_map.add(
-                pkg,
-                vcode_str,
-                label=getattr(info, "label", info.get("label", pkg)),
-                android=getattr(info, "android", info.get("android", False)),
-                local=getattr(info, "local", info.get("local", False)),
-                checked=getattr(info, "checked", info.get("checked", False)),
-                file_name=getattr(info, "file_name", info.get("file_name", "")),
-                file_hash=getattr(info, "file_hash", info.get("file_hash", "")),
-            )
-
-    # Delete orphans packages
-    to_remove = [
-        (pkg, vcode_int)
-        for (pkg, vcode_int), info in pkg_map.get_all_packages().items()
-        if not info.android and not info.local
-    ]
-    for pkg, vcode_int in to_remove:
-        pkg_map.remove(pkg, str(vcode_int))
-
-    # Refresh table
+    # UI
     main_window.table_adapter.refresh()
+    main_window.table_adapter.clear_all_checked()
 
-    # Save
-    save_file = pkg_map.get_save_file_path()
-    pkg_map.save_to_file(save_file)
+    # persist
+    save_file = main_window.package_map.get_save_file_path()
+    main_window.package_map.save_to_file(save_file)

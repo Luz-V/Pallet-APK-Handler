@@ -1,9 +1,9 @@
-/extracted_apks/class/
-/extracted_apks/droits/
-/extracted_apks/p1/
+__pycache__/
 /extracted_apks/android_extracted_list.txt
-/extracted_apks/com.adel.wiloki_636.apks
-/extracted_apks/com.fanatee.cody_400.apks
-/extracted_apks/org.bromite.bromite_1671415660.apk
+/extracted_apks/*/
+/extracted_apks/*.apks
+/extracted_apks/*.apk
 /extracted_apks/packagemap.json
-/FramaDesk-linux-x64/
+!/extracted_apks/.gitkeep
+.idea/
+

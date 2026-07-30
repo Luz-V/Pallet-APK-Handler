@@ -1,11 +1,9 @@
-import pah_logger
 import logging
 import subprocess
-import shlex
+import time
 
 from pathlib import Path
-from PyQt5.QtCore import Qt, QTimer, QEventLoop, QThread, pyqtSignal, pyqtSlot
-from PyQt5.QtWidgets import QProgressDialog, QApplication
+from PyQt5.QtCore import QTimer, QThread, pyqtSignal
 
 import pah_callbacks as pahc
 import pah_utils as pahu
@@ -18,394 +16,279 @@ class ScanWorker(QThread):
     result_ready = pyqtSignal(object)
     error_occurred = pyqtSignal(str)
     android_scan_finished = pyqtSignal(str)
+    finished = pyqtSignal(str)
 
-    def __init__(self, apk_installer_path: Path, package_map=None, parent=None,
-                 installed_list=[], saved_list=[], android_scan=True, local_scan=True):
-        # QThread and signals init.
+    def __init__(self, apk_installer_path: Path, package_map=None,
+                 parent=None, android_scan=True, local_scan=True, rebuild_aapt_dict=False):
         super().__init__(parent)
-        # Local variables
         self.apk_installer_path = apk_installer_path
-        self.package_map = package_map  # NOUVEAU: PackageMap instance
-        self.installed_list = installed_list
-        self.saved_list = saved_list
+        self.package_map = package_map
         self.android_scan = android_scan
         self.local_scan = local_scan
-        cancelled = pyqtSignal()
+        self.rebuild_aapt_dict = rebuild_aapt_dict
 
+
+    # -----------------------------
+    # APK processing (LOCAL ONLY)
+    # -----------------------------
+    def _process_apk_file(self, working_map, apk_file: Path):
+        try:
+            filename = apk_file.name
+            file_hash = pahu.get_fast_apk_hash(apk_file)
+
+            # 1. fast match (filename / hash)
+            matched_key = None
+            if not self.rebuild_aapt_dict:
+                if file_hash:
+                    matched_key = working_map.find_by_hash(file_hash)
+                if matched_key is None:
+                    matched_key = working_map.find_by_filename(filename)
+
+                if matched_key:
+                    pkg, vcode_int = matched_key
+                    info = working_map.get(pkg, str(vcode_int))
+                    if info:
+                        info.local = True
+                        info.file_name = filename
+                        if file_hash:
+                            info.file_hash = file_hash
+                    return
+
+            # 2. fallback aapt extraction
+            tmp_dir = Path(__file__).parent / "tmp"
+            pkg, vcode, label = extract_pkg_version_label(apk_file, tmp_dir)
+            existing = working_map.get(pkg, vcode)
+
+            if existing and not self.rebuild_aapt_dict:
+                existing.label = label or existing.label
+                existing.local = True
+                existing.file_name = filename
+                if file_hash:
+                    existing.file_hash = file_hash
+            else:
+                working_map.add(
+                    pkg,
+                    vcode,
+                    label=label,
+                    android=False,
+                    local=True,
+                    checked=False,
+                    file_hash=file_hash,
+                    file_name=filename,
+                )
+
+        except Exception as e:
+            logging.error(f"Error scanning {apk_file.name}: {e}")
+
+    # -----------------------------
+    # MAIN
+    # -----------------------------
     def run(self):
         try:
+            # =========================================================
+            # 0. WORKING COPY (CRITICAL FIX)
+            # =========================================================
+            working_map = pahd.PackageMap()
+
+            for (pkg, vcode_int), info in self.package_map.get_all_packages().items():
+                working_map.add(
+                    pkg,
+                    str(vcode_int),
+                    label=info.label,
+                    android=False,
+                    local=info.local,
+                    checked=False,
+                    file_hash=info.file_hash,
+                    file_name=info.file_name,
+                )
+
+            apk_dir = Path(__file__).parent / "extracted_apks"
+            apk_dir.mkdir(exist_ok=True)
+
+            tmp_dir = Path(__file__).parent / "tmp"
+            tmp_dir.mkdir(exist_ok=True)
+
+            # =========================================================
+            # 1. ANDROID SCAN
+            # =========================================================
+            self.installed_list = []
+
             if self.android_scan:
                 is_adb_connected = pahu.check_adb_connection()
+                self.progress.emit("Scanning Android installed applications...")
+
                 if is_adb_connected:
-                    self.progress.emit(
-                        "Scanning Android installed applications...\n"
-                        "Unlocking the device may help."
-                    )
-                    # 1) Scan device
                     self.installed_list = extract_packages_labels_version(
                         self.apk_installer_path
                     )
                     self.android_scan_finished.emit("Android scan complete")
                 else:
-                    logging.error("\nNo adb connection detected")
-                    if self.package_map:
-                        for info in self.package_map.get_all_packages().values():
-                            info.android = False
-                    self.installed_list = []
+                    logging.error("No adb connection detected")
+
+                installed_keys = set()
+
+                for pkg, vcode, label in self.installed_list:
+                    key = (pkg, int(vcode))
+
+                    if key in installed_keys:
+                        continue
+                    installed_keys.add(key)
+
+                    existing = working_map.get(pkg, vcode)
+
+                    if existing:
+                        existing.android = True
+                        if label and not existing.label:
+                            existing.label = label
+                    else:
+                        working_map.add(
+                            pkg,
+                            vcode,
+                            label=label,
+                            android=True,
+                            local=False,
+                            checked=False,
+                        )
+                for (_, _), info in working_map.get_all_packages().items():
+                    info.local = False
+
+                installed_keys = {(pkg, int(vcode)) for pkg, vcode, _ in self.installed_list}
+                for (pkg, vcode_int), info in working_map.get_all_packages().items():
+                    if (pkg, vcode_int) not in installed_keys:
+                        info.android = False
+                self.progress.emit(f"Android scan successful")
+
+
+            # =========================================================
+            # 2. LOCAL SCAN
+            # =========================================================
+            self.saved_list = []
+            self.progress_switch_percent.emit()
+
             if self.local_scan:
                 self.progress.emit("Scanning local APK files...")
-                apk_dir = Path(__file__).parent / "extracted_apks"
-                apk_dir.mkdir(exist_ok=True)
+                self.progress_switch_percent.emit()
 
-                if self.package_map:
-                    # NOUVELLE APPROCHE: utiliser PackageMap avec hash fallback
-                    # Forcer les flags avant le scan
-                    if not self.android_scan:
-                        for (pkg, vcode_int), info in self.package_map.get_all_packages().items():
-                            info.android = False
-                            info.local = False
+                apk_files = list(apk_dir.glob("*.apk")) + list(apk_dir.glob("*.apks"))
+                total = len(apk_files)
+                existing_files = {f.name for f in apk_files}
 
-                    self.progress.emit("Discovering APK files...")
+                # purge des références mortes
+                for (_, _), info in working_map.get_all_packages().items():
+                    if info.file_name and info.file_name not in existing_files:
+                        info.file_name = ""
+                        info.file_hash = ""
+                        info.local = False
 
-                    # Découvrir tous les fichiers APK/APKS
-                    present_files = {
-                                        p.name for p in apk_dir.glob("*.apk")
-                                    } | {
-                                        p.name for p in apk_dir.glob("*.apks")
-                                    }
-                    # Fichiers déjà connus (par nom ou hash)
-                    known_files = {
-                                      info.file_name for (pkg, vcode), info in
-                                      self.package_map.get_all_packages().items() if info.file_name
-                                  } | {
-                                      f"{pkg}_{vcode}.apk" for (pkg, vcode), info in
-                                      self.package_map.get_all_packages().items()
-                                  }
+                # reset local flag ONLY
+                for (_, _), info in working_map.get_all_packages().items():
+                    info.local = False
 
-                    # Fichiers à hasher = ceux qui sont sur le disque mais inconnus
-                    files_to_hash = [apk_dir / f for f in present_files if f not in known_files]
+                for i, apk_file in enumerate(apk_files, 1):
+                    self._process_apk_file(working_map, apk_file)
 
-                    # Mapping des fichiers existants aux packages dans PackageMap
-                    self.progress.emit("Mapping APK files to packages...")
+                    percent = int((i / total) * 100) if total else 0
+                    self.progress_percent.emit(f"Scanning {apk_file.name} ({i}/{total})...", percent)
 
-                    mapping = pahd.map_apk_files_to_packages(self.package_map, apk_dir, files_to_hash)
-                    mapped_files = set(mapping.keys())
+                self.saved_list = [
+                    (pkg, str(vcode_int), info.label)
+                    for (pkg, vcode_int), info in working_map.get_all_packages().items()
+                    if info.local
+                ]
+                self.progress.emit(f"Local scan successful")
 
-                    # Découvrir les nouveaux fichiers non mappés
-                    unmapped_files = present_files - mapped_files
+            # =========================================================
+            # 3. RESULT CLEANUP (NO GLOBAL MUTATION)
+            # =========================================================
+            working_map.remove_orphans()
 
-                    # Résoudre chaque fichier local : filename -> hash -> aapt
-                    if unmapped_files:
-                        tmp_dir = Path(__file__).parent / "tmp"
-                        tmp_dir.mkdir(exist_ok=True)
+            # =========================================================
+            # 4. EMIT RESULT (SAFE COPY)
+            # =========================================================
+            result_map = pahd.PackageMap()
 
-                        for i, filename in enumerate(unmapped_files):
-                            self.progress.emit(f"Scanning {filename} ({i + 1}/{len(unmapped_files)})")
-                            apk_file = apk_dir / filename
+            for (pkg, vcode_int), info in working_map.get_all_packages().items():
+                result_map.add(
+                    pkg,
+                    str(vcode_int),
+                    label=info.label,
+                    android=info.android,
+                    local=info.local,
+                    checked=info.checked,
+                    file_hash=info.file_hash,
+                    file_name=info.file_name,
+                )
 
-                            try:
-                                # 1) lookup par filename dans le JSON
-                                matched_key = self.package_map.find_by_filename(filename)
 
-                                # 2) fallback: lookup par hash
-                                file_hash = pahu.get_fast_apk_hash(apk_file)
-                                if not matched_key and file_hash:
-                                    matched_key = self.package_map.find_by_hash(file_hash)
-
-                                if matched_key:
-                                    pkg, vcode_int = matched_key
-                                    vcode_str = str(vcode_int)
-
-                                    info = self.package_map.get(pkg, vcode_str)
-                                    if info and not info.label:
-                                        try:
-                                            # tentative douce : extraire le label si possible
-                                            _, _, label = extract_pkg_version_label(apk_file, tmp_dir)
-                                            if label:
-                                                info.label = label
-                                        except Exception:
-                                            pass  # surtout ne rien casser ici
-
-                                    self.package_map.update_file_name(pkg, vcode_str, filename)
-                                    if file_hash:
-                                        self.package_map.update_file_hash(pkg, vcode_str, file_hash)
-                                    continue
-
-                                # 3) aapt scan si inconnu
-                                pkg, vcode, label = extract_pkg_version_label(apk_file, tmp_dir)
-                                self.package_map.add(
-                                    pkg,
-                                    vcode,
-                                    label=label,
-                                    android=False,
-                                    local=True,
-                                    checked=False,
-                                    file_hash=file_hash,
-                                    file_name=filename,
-                                )
-
-                            except Exception as e:
-                                logging.error(f"Error scanning {filename}: {e}")
-
-                    # Mettre à jour les hashes des fichiers mappés
-                    self.progress.emit("Updating file hashes...")
-                    for filename, (label, pkg, vcode) in mapping.items():
-                        apk_file = apk_dir / filename
-                        file_hash = pahu.get_fast_apk_hash(apk_file)
-                        if file_hash:
-                            self.package_map.update_file_hash(pkg, vcode, file_hash)
-                        self.package_map.update_file_name(pkg, vcode, filename)
-
-                    # NOUVEAU: Supprimer les packages orphelins (fichiers supprimés)
-                    self.progress.emit("Removing orphaned packages...")
-                    orphaned_packages = []
-                    for (pkg, vcode_int), info in self.package_map.get_all_packages().items():
-                        if info.local:  # Seulement les packages avec backup local
-                            expected_filename = f"{pkg}_{vcode_int}.apk"
-                            if expected_filename not in present_files:
-                                # Vérifier si on peut le retrouver par hash
-                                found_by_hash = False
-                                if info.file_hash:
-                                    for filename in present_files:
-                                        apk_file = apk_dir / filename
-                                        file_hash = pahu.get_fast_apk_hash(apk_file)
-                                        if file_hash == info.file_hash:
-                                            found_by_hash = True
-                                            break
-
-                                if not found_by_hash:
-                                    orphaned_packages.append((pkg, vcode_int))
-
-                    # Supprimer les packages orphelins
-                    for pkg, vcode_int in orphaned_packages:
-                        self.package_map.remove(pkg, str(vcode_int))
-
-                    if orphaned_packages:
-                        self.progress.emit(f"Removed {len(orphaned_packages)} orphaned packages")
-
-                    # Construire saved_list depuis PackageMap
-                    self.saved_list = [
-                        (pkg, str(vcode_int), info.label)
-                        for (pkg, vcode_int), info in self.package_map.get_all_packages().items()
-                        if info.local
-                    ]
-
-                    self.progress.emit(f"Found {len(self.saved_list)} local packages")
-                else:
-                    # APPROCHE LEGACY: garder save.tmp pour compatibilité
-                    self.progress.emit("Scanning local APK(s) files : loading save.tmp …")
-                    logging.info("Local scan started")
-
-                    # 2) Load cache
-                    save_file = apk_dir / "save.tmp"
-                    save_cache: dict[str, tuple[str, str, str]] = {}
-                    save_file.touch(exist_ok=True)
-
-                    for line in save_file.read_text(encoding="utf-8").splitlines():
-                        try:
-                            parts = shlex.split(line)
-                            if len(parts) == 4:
-                                fname, label, pkg, vcode = parts
-                                save_cache[fname] = (label, pkg, vcode)
-                        except Exception as e:
-                            logging.warning(f"Ignored line in save.tmp: {line!r} ({e})")
-
-                    # 3) Discover what's on disk
-                    present = {
-                                  p.name for p in apk_dir.glob("*.apk")
-                              } | {
-                                  p.name for p in apk_dir.glob("*.apks")
-                              }
-
-                    # 4) Purge stale entries
-                    for stale in set(save_cache) - present:
-                        save_cache.pop(stale)
-
-                    self.progress.emit("Scanning unregistered local APK(s) files …")
-                    # 5) Scan & rename new ones
-                    tmp_dir = Path(__file__).parent / "tmp"
-                    tmp_dir.mkdir(exist_ok=True)
-                    self.progress_switch_percent.emit()
-                    total_rescans = len(present - set(save_cache))
-
-                    for index, fname in enumerate(present - set(save_cache)):
-                        self.progress_percent.emit(f"Scanning unregistered local APK(s) files …\n{fname}",
-                                                   int(index / total_rescans * 100))
-                        apk = apk_dir / fname
-                        logging.debug(f"scanning for {fname}")
-                        try:
-                            pkg, vcode, label = extract_pkg_version_label(apk, tmp_dir)
-                            canonical = f"{pkg}_{vcode}{apk.suffix}"
-                            if canonical != fname:
-                                apk.rename(apk_dir / canonical)
-                                fname = canonical
-                            save_cache[fname] = (label, pkg, vcode)
-                        except Exception as e:
-                            logging.error(f"Error scanning {fname}: {e}")
-
-                    # 6) Rewrite save.tmp
-                    self.progress.emit("Updating save.tmp …")
-                    with open(save_file, "w", encoding="utf-8") as f:
-                        for fname, (label, pkg, vcode) in sorted(save_cache.items()):
-                            f.write(f'{fname} "{label}" {pkg} {vcode}\n')
-
-                    # 7) Build self.saved_list from save_cache
-                    self.saved_list = [
-                        (pkg, vcode, label)
-                        for (label, pkg, vcode) in save_cache.values()
-                    ]
-
-            # 8) Fusion device + local backup apps list dans PackageMap
-            if self.package_map:
-                apk_dir = Path(__file__).parent / "extracted_apks"
-                present_files = {p.name for p in apk_dir.glob("*.apk")} | {p.name for p in apk_dir.glob("*.apks")}
-
-                for (pkg, vcode_int), info in self.package_map.get_all_packages().items():
-                    for ext in ['.apk', '.apks']:
-                        if f"{pkg}_{vcode_int}{ext}" in present_files:
-                            info.local = True
-                            break
-
-                # Check installed packaged
-                for pkg, vcode, label in self.installed_list:
-                    key = (pkg, int(vcode))
-                    if key in self.package_map.get_all_packages():
-                        self.package_map.get_all_packages()[key].android = True
-                    else:
-                        # Cas : installé sur Android mais pas connu localement
-                        self.package_map.add(
-                            pkg,
-                            vcode,
-                            label=label,
-                            android=True,
-                            local=False,
-                            checked=False,
-                        )
-
-                # Émettre PackageMap directement
-                self.result_ready.emit(self.package_map)
-            else:
-                # Fallback pour compatibilité avec l'ancien système
-                table_dico: dict[tuple[str, str], dict[str, Any]] = {}
-
-                # Ajouter les packages installés sur Android
-                for pkg, vcode, label in self.installed_list:
-                    key = (pkg, vcode)
-                    if key not in table_dico:
-                        table_dico[key] = {"label": label, "android": False, "local": False}
-                    table_dico[key]["android"] = True
-
-                # Check locally found packages
-                for pkg, vcode, label in self.saved_list:
-                    key = (pkg, vcode)
-                    if key not in table_dico:
-                        table_dico[key] = {"label": label, "android": False, "local": False}
-                    table_dico[key]["local"] = True
-
-                # check android installed packages
-                for pkg, vcode, label in self.installed_list:
-                    key = (pkg, int(vcode))
-                    if key in self.package_map.get_all_packages():
-                        self.package_map.get_all_packages()[key].android = True
-                    else:
-                        # Adding new entry if needed
-                        self.package_map.add(
-                            pkg,
-                            vcode,
-                            label=label,
-                            android=True,
-                            local=False,
-                            checked=False,
-                        )
-
-                self.result_ready.emit(table_dico)
+            self.result_ready.emit(result_map)
+            if self.android_scan and self.local_scan:
+                self.finished.emit(
+                    f"Combined scan finished : "
+                    f"{len(self.saved_list)} local backups and "
+                    f"{len(self.installed_list)} installed packages.")
+            elif self.android_scan and not self.local_scan:
+                self.finished.emit(
+                    f"Android scan finished : "
+                    f"{len(self.installed_list)} installed packages.")
+            elif not self.android_scan and self.local_scan:
+                self.finished.emit(
+                    f"Local scan finished : "
+                    f"{len(self.saved_list)} local backups.")
             logging.info("Scan finished successfully")
+
 
         except Exception as e:
             self.error_occurred.emit(f"Scan error: {str(e)}")
             logging.error(f"Scan error: {str(e)}")
 
+# === Name, Label, VersionCode functions ===
+def on_scan_device_clicked(main_window, scan_android=True, scan_local=True, reset_appt_dict=False):
 
-def on_scan_device_clicked(main_window, scan_android=True, scan_local=True, preserve_android_on_local_scan=True):
-    main_table = main_window.tableWidget_2
-    row_count = main_table.rowCount()
-    local_saved_list = []  # tuples (package_name, version_code, label)
-    android_installed_list = []  # tuples (package_name, version_code, label)
+    pahc.set_progress_indeterminate(main_window)  # ← dès le départ
+    pahc.set_status(main_window, "Starting applications scan...")
 
-    # In case previous data needs to be saved before scan
-    if not scan_android or not scan_local:
-        for row in range(row_count):
-            item_col3 = main_table.item(row, 3)  # android-installed check
-            item_col4 = main_table.item(row, 4)  # local-backup check
-            is_installed = item_col3 and item_col3.text().strip() == "✓"
-            has_backup = item_col4 and item_col4.text().strip() == "✓"
-            if scan_android and has_backup:
-                # list local-saved packages in table and flush the rest
-                package = main_table.item(row, 1).text().strip()
-                version = main_table.item(row, 2).text().strip()
-                label = main_table.item(row, 0).text().strip()
-                local_saved_list.append((package, version, label))
-            elif scan_local and is_installed and preserve_android_on_local_scan:
-                # list android-installed packages in table and flush the rest
-                package = main_table.item(row, 1).text().strip()
-                version = main_table.item(row, 2).text().strip()
-                label = main_table.item(row, 0).text().strip()
-                android_installed_list.append((package, version, label))
-
-    # Flush the table
-    main_window.tableWidget_2.setRowCount(0)
-
-    # Display progress bar
-    main_window.progress_dialog = QProgressDialog(
-        "Starting Applications scan ...", "Cancel", 0, 100, main_window
-    )
-    main_window.progress_dialog.setValue(0)
-    main_window.progress_dialog.setWindowTitle("Scanning devices")
-    main_window.progress_dialog.setWindowModality(Qt.WindowModal)
-    main_window.progress_dialog.setCancelButtonText("Cancel")
-    main_window.progress_dialog.show()
-
-    # FORCE paint
-    main_window.progress_dialog.repaint()
-    QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
-
-    # launching scan thread
     current_dir = Path(__file__).parent
     apk_path = current_dir / 'assets' / 'app-release.apk'
 
     main_window.worker = ScanWorker(
         apk_path,
         package_map=main_window.package_map,
-        installed_list=android_installed_list,
-        saved_list=local_saved_list,
         android_scan=scan_android,
         local_scan=scan_local,
+        rebuild_aapt_dict=reset_appt_dict,
     )
 
     main_window.worker.progress.connect(
-        lambda msg: pahc.update_progress_dialog(main_window, msg)
+        lambda msg: pahc.set_status(main_window, msg)
     )
     main_window.worker.progress_switch_percent.connect(
-        lambda: pahc.switch_progress_to_percent(main_window)
+        lambda: pahc.set_progress_determinate(main_window)
     )
     main_window.worker.progress_percent.connect(
-        lambda msg, percent: pahc.update_progress_dialog_percent(main_window, msg, percent)
+        lambda msg, percent: (
+            pahc.set_progress_determinate(main_window),
+            pahc.set_progress_value(main_window, percent),
+            pahc.set_status(main_window, msg)
+        )
     )
     main_window.worker.android_scan_finished.connect(
-        lambda msg: pahc.update_scan_message(main_window, msg)
+        lambda msg: pahc.set_status(main_window, msg)
     )
     main_window.worker.result_ready.connect(
         lambda pkg_dico: pahd.on_scan_finished(main_window, pkg_dico)
+    )
+    main_window.worker.finished.connect(
+        lambda msg: (QTimer.singleShot(0, lambda: (
+            pahc.set_status(main_window, msg),
+            pahc.reset_progress(main_window),
+            main_window.table_adapter.clear_selection)
+        ))
     )
     main_window.worker.error_occurred.connect(
         lambda errmsg: pahc.on_scan_failed(main_window, errmsg)
     )
 
-    # START WORKER SAFELY
     QTimer.singleShot(50, main_window.worker.start)
-
-
-# === Name, Label, VersionCode functions ===
 
 def parse_aapt_output(aapt_output: str) -> tuple[str, str, str]:
     """
@@ -479,6 +362,7 @@ def extract_pkg_version_label(apk_file: Path, tmpdir: Path) -> tuple[str, str, s
                 break
     else:
         pahu.raise_error(f"Unsupported file type: {apk_file.suffix}")
+    logging.debug(f"cleaning tmpdir")
     pahu.clean_tmp_dir(tmpdir)
     if not package_name:
         pahu.raise_error("Failed to extract package name.")
@@ -525,29 +409,42 @@ def extract_packages_labels_version(apk_installer_path: Path) -> list[tuple[str,
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to install miniapp: {e}") from e
 
-    # Lancer l’activité principale
+    # Strating main activity from miniapp
     try:
         subprocess.run([
-            "adb", "shell", "monkey", "-p", pkg_name,
-            "-c", "android.intent.category.LAUNCHER", "1"
+            "adb", "shell", "am", "start", "-n",
+            "com.pah.miniapp/.MainActivity"
         ], capture_output=True, check=True)
-        logging.info("miniapp launched.")
+        logging.info("miniapp launched (main activity).")
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Failed to launch miniapp: {e}") from e
 
     # Wait before reading list file
     max_attempts = 10
-    delay = 2.0
+    delay = 1.0
+    last_size = -1
     for attempt in range(max_attempts):
         time.sleep(delay)
-        res = subprocess.run(["adb", "shell", "ls", remote_path],
-                             capture_output=True, text=True)
-        logging.debug(f"[shell ls] {res.stdout.strip()}")
-        if "No such file" not in res.stdout:
+        logging.debug(f"adb check repport size via [shell stat -c %s]")
+        logging.debug(f"Attempt {attempt+1}/{max_attempts}")
+        res = subprocess.run(
+            ["adb", "shell", "stat", "-c", "%s", remote_path],
+            capture_output=True,
+            text=True
+        )
+        try:
+            size = int(res.stdout.strip())
+        except:
+            logging.debug(f"Scan repport not ready yet ({attempt+1}/{max_attempts})")
+            continue
+        logging.debug(f"file size : {size} bytes")
+
+        if size > 0 and size == last_size:
+            logging.info("File is stable, ready to pull")
             break
-        logging.debug(f"Waiting for file... ({attempt+1}/{max_attempts})")
+        last_size = size
     else:
-        raise RuntimeError("Timeout (10s): miniapp_package_list.txt not found on device.")
+        raise RuntimeError("Timeout (30s): Scan repport miniapp_package_list.txt not found on device.")
 
     # Pull list file
     try:
@@ -573,7 +470,7 @@ def extract_packages_labels_version(apk_installer_path: Path) -> list[tuple[str,
 
     return results
 
-
+# Not used yet (NeoBackup)
 def read_meta_info(meta_file: Path) -> tuple[str, bool]:
     """Read package_name and is_split_apk from a meta_v2.am.json file."""
     import json

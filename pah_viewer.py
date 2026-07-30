@@ -1,161 +1,332 @@
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QCheckBox, QTableWidget, QTableWidgetItem, QWidget, QHBoxLayout
-from PyQt5.QtGui import QColor
+import logging
+
 from collections import defaultdict
+from PyQt5.QtCore import Qt, QObject, QModelIndex, QItemSelectionModel
+from PyQt5.QtGui import QColor, QStandardItemModel, QStandardItem
+from PyQt5.QtWidgets import QAbstractItemView, QTableView
+
 import pah_data as pahd
 
 
-# A INVESTIGUER
-def clear_selection(main_window):
-    try:
-        import pah_events
-        pah_events.clear_selection(main_window)
-    except Exception:
-        pass
+class PackageTableAdapter(QObject):
+    """
+    Adaptateur QTableView + QStandardItemModel.
+    - colonne 5 = case cochable native Qt
+    - l’état coché est conservé côté UI via checked_state
+    - is_checked() lit l’état réel du modèle affiché
+    """
 
+    HEADERS = ["Label", "Package", "Version", "Android", "Local", "Select"]
 
-class PackageTableAdapter:
-    """Adaptateur pour synchroniser un PackageMap avec un QTableWidget."""
-
-    def __init__(self, table: QTableWidget, pkg_map: pahd.PackageMap):
+    def __init__(self, table: QTableView, pkg_map: pahd.PackageMap):
+        super().__init__()
         self.table = table
+        self.view = table  # ← IMPORTANT : définir AVANT utilisation
         self.pkg_map = pkg_map
 
-        # Décocher tri automatique pour l'instant
-        self.table.setSortingEnabled(False)
+        self.model = QStandardItemModel(0, len(self.HEADERS), self.view)
+        self.view.setModel(self.model)
+        self.view.setSortingEnabled(True)
+        self.view.sortByColumn(0, Qt.AscendingOrder)
+
+        self._row_index: dict[tuple[str, str], int] = {}
+        self.checked_state: dict[tuple[str, str], bool] = {}
+        self.filter_text = ""
+
+        self.last_clicked_row: int | None = None
+        self._dragging = False
+        self._drag_state: bool | None = None
+
+        self.view.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.view.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.view.setMouseTracking(True)
+
+        self.view.selectionModel().selectionChanged.connect(self._on_selection_changed)
+
+    def _on_selection_changed(self, selected, deselected) -> None:
+        self._switch_state_selection(selected, True)
+        self._switch_state_selection(deselected, False)
+
+    def _switch_state_selection(self, selection, state:bool) -> None:
+        for selection_range in selection:
+            top = selection_range.top()
+            bottom = selection_range.bottom()
+
+            for row in range(top, bottom + 1):
+                pkg_item = self.model.item(row, 1)
+                vcode_item = self.model.item(row, 2)
+
+                if not pkg_item or not vcode_item:
+                    continue
+                key = (pkg_item.text(), vcode_item.text())
+                self.checked_state[key] = state
+                item = self.model.item(row, 5)
+                # UI sync immédiate (LOCAL ONLY)
+                if (item.text()=="●" and state) or ( item.text()=="" and not state):
+                    logging.debug(f"{pkg_item.text()}: check state ≠ selected state")
+                if item:
+                    item.setText("●" if state else "")
+                    logging.debug(f"{pkg_item.text()}: checked" if state else f"{pkg_item.text()}: unchecked")
 
     def refresh(self) -> None:
-        """Reconstruit la table depuis le modèle."""
-        self.table.setRowCount(len(self.pkg_map.get_all_packages()))
+        """Reconstruit le modèle depuis PackageMap."""
+        data = sorted(
+            self.pkg_map.get_all_packages().items(),
+            key=lambda x: (x[0][0], x[0][1])
+        )
+        if self.filter_text:
+            filtered = []
+            for (pkg, vcode), info in data:
+                if (
+                    self.filter_text in pkg.lower()
+                    or self.filter_text in (info.label or "").lower()
+                ):
+                    filtered.append(((pkg, vcode), info))
+            data = filtered
 
-        pkg_name_to_rows = defaultdict(list)
+        self.model.setRowCount(len(data))
+        self.model.blockSignals(True)
+        try:
+            self.model.clear()
+            self.model.setColumnCount(len(self.HEADERS))
+            self.model.setHorizontalHeaderLabels(self.HEADERS)
+            self.model.setRowCount(len(data))
+            self._row_index.clear()
+            pkg_name_to_rows = defaultdict(list)
 
-        for row, ((pkg, vcode_int), info) in enumerate(
-                sorted(self.pkg_map.get_all_packages().items(), key=lambda x: (x[0][0], x[0][1]))
-        ):
-            self._populate_row(row, pkg, vcode_int, info)
-            pkg_name_to_rows[pkg].append(row)
+            for row, ((pkg, vcode_int), info) in enumerate(data):
+                vcode_str = str(vcode_int)
+                self.model.setItem(row, 0, self._ro_item(info.label))
+                self.model.setItem(row, 1, self._ro_item(pkg))
+                self.model.setItem(row, 2, self._ro_item(vcode_str))
+                self.model.setItem(row, 3, self._ro_item("✓" if info.android else ""))
+                self.model.setItem(row, 4, self._ro_item("✓" if info.local else ""))
+                chk = QStandardItem()
+                chk.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                self.model.setItem(row, 5, chk)
+                pkg_name_to_rows[pkg].append(row)
+            self.render_checked_state()
+            self._apply_version_colors(pkg_name_to_rows)
+        finally:
+            self.model.blockSignals(False)
 
-        # Appliquer les couleurs pour les versions multiples
-        self._apply_version_colors(pkg_name_to_rows)
+        self.view.setSortingEnabled(True)
+        self.view.sortByColumn(
+            self.view.horizontalHeader().sortIndicatorSection(),
+            self.view.horizontalHeader().sortIndicatorOrder()
+        )
 
-        self.table.setSortingEnabled(True)
-        self.pkg_map.clear_dirty()
-
-    def _populate_row(self, row: int, pkg: str, vcode_int: int, info: pahd.PackageInfo) -> None:
-        """Remplit une ligne de la table pour un package."""
-        vcode_str = str(vcode_int)
-
-        # Col 0 : label
-        item = QTableWidgetItem(info.label)
+    def _ro_item(self, text) -> QStandardItem:
+        item = QStandardItem(str(text))
         item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-        self.table.setItem(row, 0, item)
+        return item
 
-        # Col 1 : package
-        item = QTableWidgetItem(pkg)
-        item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-        self.table.setItem(row, 1, item)
+    def is_checked(self, pkg: str, vcode: str) -> bool:
+        index = self.find_index(pkg, vcode)
+        if not index.isValid():
+            return False
+        item = self.model.item(index.row(), 5)
+        return item and item.text() == "●"
 
-        # Col 2 : version
-        item = QTableWidgetItem(vcode_str)
-        item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-        self.table.setItem(row, 2, item)
+    def set_checked(self, pkg: str, vcode: str, checked: bool) -> None:
+        index = self.find_index(pkg, vcode)
+        if not index.isValid():
+            return
+        item = self.model.item(index.row(), 5)
+        if item:
+            item.setText("●" if checked else "")
 
-        # Col 3 : Android installed
-        chk_text = "✓" if info.android else ""
-        item = QTableWidgetItem(chk_text)
-        item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-        item.setTextAlignment(Qt.AlignCenter)
-        self.table.setItem(row, 3, item)
+    def set_filter(self, text: str) -> None:
+        self.filter_text = text.lower().strip()
+        self.refresh()
 
-        # Col 4 : Local saved
-        chk_text = "✓" if info.local else ""
-        item = QTableWidgetItem(chk_text)
-        item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-        item.setTextAlignment(Qt.AlignCenter)
-        self.table.setItem(row, 4, item)
+    def toggle_all_checked(self) -> None:
+        if not self.model.rowCount():
+            return
+        # état global courant
+        all_checked = all(
+            self.is_checked(
+                self.model.item(row, 1).text(),
+                self.model.item(row, 2).text()
+            )
+            for row in range(self.model.rowCount())
+            if self.model.item(row, 1) and self.model.item(row, 2)
+        )
+        new_state = not all_checked
+        sel_model = self.view.selectionModel()
+        if sel_model:
+            sel_model.blockSignals(True)
+        self.model.blockSignals(True)
+        try:
+            # reset sélection dans tous les cas
+            if sel_model:
+                sel_model.clearSelection()
+                sel_model.setCurrentIndex(QModelIndex(), QItemSelectionModel.NoUpdate)
 
-        # Col 5 : checkbox
-        self._add_checkbox(row, 5, info.checked, (pkg, vcode_str))
+            for row in range(self.model.rowCount()):
+                pkg_item = self.model.item(row, 1)
+                vcode_item = self.model.item(row, 2)
+                item = self.model.item(row, 5)
+                if not pkg_item or not vcode_item or not item:
+                    continue
+                key = (pkg_item.text(), vcode_item.text())
 
-    def _add_checkbox(self, row: int, col: int, checked: bool, pkg_key: tuple) -> None:
-        """Ajoute un QCheckBox centré et synchronisé avec le PackageMap."""
-        cb = QCheckBox()
-        cb.setChecked(checked)
+                # --- LOGIQUE ---
+                self.checked_state[key] = new_state
+                item.setText("●" if new_state else "")
 
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.addWidget(cb)
-        layout.setAlignment(Qt.AlignCenter)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.table.setCellWidget(row, col, container)
+                # --- UI SELECTION ---
+                if sel_model and new_state:
+                    index = self.model.index(row, 0)
+                    sel_model.select(
+                        index,
+                        QItemSelectionModel.Select | QItemSelectionModel.Rows
+                    )
+        finally:
+            self.model.blockSignals(False)
+            if sel_model:
+                sel_model.blockSignals(False)
+        self.render_checked_state()
+        self.view.viewport().update()
+        logging.debug("Select+Check all toggled -> %s", new_state)
 
-        # Item invisible pour le tri
-        sort_item = QTableWidgetItem()
-        sort_item.setForeground(Qt.transparent)
-        sort_item.setTextAlignment(Qt.AlignCenter)
-        sort_item.setData(Qt.UserRole, checked)
-        sort_item.setFlags(Qt.ItemIsEnabled)
-        self.table.setItem(row, col, sort_item)
+    def select_and_check_all(self) -> None:
+        if not self.model.rowCount():
+            return
+        sel_model = self.view.selectionModel()
+        if sel_model:
+            sel_model.blockSignals(True)
 
-        # Connect checkbox → PackageMap
-        def on_state_changed(state: int):
-            is_checked = (state == Qt.Checked)
-            pkg, vcode = pkg_key
-            self.pkg_map.set_check(pkg, vcode, is_checked)
-            sort_item.setText("1" if is_checked else "0")
-            sort_item.setData(Qt.UserRole, is_checked)
+        self.model.blockSignals(True)
+        try:
+            # reset sélection
+            if sel_model:
+                sel_model.clearSelection()
+                sel_model.setCurrentIndex(QModelIndex(), QItemSelectionModel.NoUpdate)
 
-        cb.stateChanged.connect(on_state_changed)
+            for row in range(self.model.rowCount()):
+                pkg_item = self.model.item(row, 1)
+                vcode_item = self.model.item(row, 2)
 
-    def _apply_version_colors(self, pkg_name_to_rows: dict) -> None:
-        """Colorie les lignes selon les versions d’un même package."""
-        for pkg_name, rows in pkg_name_to_rows.items():
+                if not pkg_item or not vcode_item:
+                    continue
+                key = (pkg_item.text(), vcode_item.text())
+                # --- CHECK ---
+                self.checked_state[key] = True
+                # --- SELECT ---
+                if sel_model:
+                    index = self.model.index(row, 0)
+                    sel_model.select(
+                        index,
+                        QItemSelectionModel.Select | QItemSelectionModel.Rows
+                    )
+        finally:
+            self.model.blockSignals(False)
+            if sel_model:
+                sel_model.blockSignals(False)
+        # rendu des checks
+        self.render_checked_state()
+        self.view.viewport().update()
+        logging.debug("Select + Check ALL applied")
+
+    def invert_all(self) -> None:
+        if not self.model.rowCount():
+            return
+        sel_model = self.view.selectionModel()
+
+        if sel_model:
+            sel_model.blockSignals(True)
+        self.model.blockSignals(True)
+
+        try:
+            if sel_model:
+                sel_model.clearSelection()
+                sel_model.setCurrentIndex(QModelIndex(), QItemSelectionModel.NoUpdate)
+
+            for row in range(self.model.rowCount()):
+                pkg_item = self.model.item(row, 1)
+                vcode_item = self.model.item(row, 2)
+                item = self.model.item(row, 5)
+                if not pkg_item or not vcode_item or not item:
+                    continue
+                key = (pkg_item.text(), vcode_item.text())
+                # état actuel (UI = source de vérité ici)
+                current_state = (item.text() == "●")
+                new_state = not current_state
+                # --- DATA ---
+                self.checked_state[key] = new_state
+                # --- UI CHECK ---
+                item.setText("●" if new_state else "")
+                # --- UI SELECTION ---
+                if sel_model and new_state:
+                    index = self.model.index(row, 0)
+                    sel_model.select(
+                        index,
+                        QItemSelectionModel.Select | QItemSelectionModel.Rows
+                    )
+        finally:
+            self.model.blockSignals(False)
+            if sel_model:
+                sel_model.blockSignals(False)
+        self.view.viewport().update()
+        logging.debug("Invert selection + checked")
+
+    # Clear_1=> selection
+    def clear_selection(self) -> None:
+        sel_model = self.view.selectionModel()
+        if sel_model:
+            sel_model.clearSelection() # Selection
+            sel_model.setCurrentIndex(QModelIndex(), QItemSelectionModel.NoUpdate)
+        self.clear_all_checked() # checked_state + item ""
+
+    # Clear 2 => checked
+    def clear_all_checked(self):
+        self.checked_state.clear()
+        for row in range(self.model.rowCount()):
+            item = self.model.item(row, 5)
+            if item:
+                item.setText("")
+
+    def find_index(self, pkg: str, vcode: str):
+        for row in range(self.model.rowCount()):
+            p = self.model.item(row, 1)
+            v = self.model.item(row, 2)
+            if p and v and (p.text(), v.text()) == (pkg, str(vcode)):
+                return self.model.index(row, 0)
+        return QModelIndex()
+
+    def _apply_version_colors(self, pkg_rows):
+        for pkg, rows in pkg_rows.items():
             if len(rows) <= 1:
-                for row in rows:
-                    for col in range(self.table.columnCount()):
-                        item = self.table.item(row, col)
-                        if item:
-                            item.setBackground(QColor("white"))
-            else:
-                # Tri par version croissante
-                version_entries = []
-                for row in rows:
-                    vcode = int(self.table.item(row, 2).text())
-                    version_entries.append((row, vcode))
-                version_entries.sort(key=lambda x: x[1])
+                continue
+            versions = []
 
-                for idx, (row, _) in enumerate(version_entries):
-                    if idx == 0:
-                        color = QColor(255, 230, 180)  # Orange (oldest)
-                    elif idx == len(version_entries) - 1:
-                        color = QColor(200, 255, 200)  # Green (latest)
-                    else:
-                        color = QColor(255, 255, 180)  # Yellow (intermediate)
+            for r in rows:
+                v = int(self.model.item(r, 2).text())
+                versions.append((r, v))
+            versions.sort(key=lambda x: x[1])
 
-                    for col in range(self.table.columnCount()):
-                        item = self.table.item(row, col)
-                        if item:
-                            item.setBackground(color)
+            for i, (row, _) in enumerate(versions):
+                color = (
+                    QColor(255, 230, 180) if i == 0 else
+                    QColor(200, 255, 200) if i == len(versions) - 1 else
+                    QColor(255, 255, 180)
+                )
+                for c in range(self.model.columnCount()):
+                    item = self.model.item(row, c)
+                    if item:
+                        item.setBackground(color)
 
-    def items(self):
-        return self._data.items()
+    # pas encore utilisée
+    def render_checked_state(self) -> None:
+        for row in range(self.model.rowCount()):
+            pkg_item = self.model.item(row, 1)
+            vcode_item = self.model.item(row, 2)
+            item = self.model.item(row, 5)
+            if not pkg_item or not vcode_item or not item:
+                continue
+            key = (pkg_item.text(), vcode_item.text())
+            state = self.checked_state.get(key, False)
+            item.setText("●" if state else "")
 
-    # NOT USED
-    # TO INVESTIGATE
-    def set_checked(self, pkg: str, vcode: str, checked: bool):
-        info = self.get(pkg, vcode)
-        if info and info.checked != checked:
-            info.checked = checked
-            self._dirty.add((pkg, int(vcode)))
-
-    # NOT USED
-    def find_row(self, pkg: str, vcode: str) -> int:
-        """Retourne la ligne correspondant à pkg + version, -1 si non trouvé."""
-        for row in range(self.table.rowCount()):
-            pkg_item = self.table.item(row, 1)
-            vcode_item = self.table.item(row, 2)
-            if pkg_item and vcode_item:
-                if pkg_item.text().strip() == pkg and vcode_item.text().strip() == vcode:
-                    return row
-        return -1

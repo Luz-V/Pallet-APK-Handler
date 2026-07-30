@@ -4,8 +4,6 @@ import shutil
 import hashlib
 from pathlib import Path
 
-DEBUG_FLAG = False
-
 
 class PAHError(Exception):
     """Custom exception for PAH errors."""
@@ -40,21 +38,18 @@ def unzip_apks_to_tmpdir(file_path: Path, tmpdir: Path):
         ["7z", "x", str(file_path), f"-o{tmpdir}", "-y"],
         capture_output=True, text=True)
     if process.stdout:
-        logging.debug(f"[7z stdout] {process.stdout.strip()}")
+        logging.debug(f"[7z stdout] {file_path.name}\n{process.stdout.strip()}")
     if process.stderr:
-        logging.error(f"[7z stderr] {process.stderr.strip()}")
+        logging.error(f"[7z stderr] {file_path.name}\n{process.stderr.strip()}")
     return process.returncode == 0
 
 def get_fast_apk_hash(apk_path: Path) -> str:
-    """Calcule un hash rapide d'un APK pour identification.
-    
-    Utilise Blake2b (plus rapide que SHA-256) sur les premiers 64KB.
-    
+    """Compute a quick hash from a APK file for identification.
+    Use Blake2b (faster than SHA-256) on the first 64KB.
     Args:
-        apk_path: Chemin vers le fichier APK
-        
+        apk_path: Path to APK file
     Returns:
-        str: Hash hexadécimal
+        str: hexa Hash
     """
     try:
         hasher = hashlib.blake2b(digest_size=16)  # 128 bits = 32 chars hex
@@ -70,20 +65,7 @@ def get_fast_apk_hash(apk_path: Path) -> str:
         logging.error(f"Failed to hash {apk_path}: {e}")
         return ""
 
+# Obsolete (neobackup-related)
 def is_package_installed(pkg: str, installed_list: list[str]) -> bool:
     """Check if pkg is in installed_list."""
     return pkg in installed_list
-
-def create_output_dir(directory: Path):
-    """Create the output directory if it doesn't exist."""
-    directory.mkdir(parents=True, exist_ok=True)
-
-def check_file(file_path: Path):
-    """Ensure the given file exists."""
-    file_exist = file_path.is_file()
-    if not file_exist:
-        if DEBUG_FLAG:
-            logging.warning(f'"{file_path}" not found.')
-        else:
-            raise_error(f'"{file_path}" not found.')
-    return file_exist

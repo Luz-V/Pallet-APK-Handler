@@ -3,12 +3,54 @@ import os
 import subprocess
 
 from pathlib import Path
-from PyQt5.QtCore import Qt, QEventLoop
-from PyQt5.QtWidgets import QProgressDialog, QApplication
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 
 import pah_callbacks as pahc
-import pah_workers as pahw
 import pah_utils as pahu
+
+
+class BackupWorker(QThread):
+    progress = pyqtSignal(str, int)
+    success = pyqtSignal(str, str)
+    error = pyqtSignal(str)
+    finished = pyqtSignal()
+    cancelled = pyqtSignal()
+
+    def __init__(self, backup_list, apk_dir):
+        super().__init__()
+        self.backup_list = backup_list
+        self.apk_dir = apk_dir
+        self._cancel_requested = False
+
+    def request_cancel(self):
+        self._cancel_requested = True
+
+    def run(self):
+        try:
+            total = len(self.backup_list)
+            for i, (pkg_name, version_code) in enumerate(self.backup_list):
+                if self._cancel_requested:
+                    self.cancelled.emit()
+                    return
+
+                progress = int((i / total) * 100)
+                self.progress.emit(f"Saving {pkg_name}_{version_code}.apk ({i}/{total})...", progress)
+
+                try:
+                    apk_file = extract_package(pkg_name, version_code, Path(self.apk_dir))
+                    if apk_file:
+                        self.success.emit(pkg_name, version_code)
+                    else:
+                        self.error.emit(f"Failed to backup {pkg_name} v{version_code}")
+                except Exception as e:
+                    self.error.emit(f"Error backing up {pkg_name}: {str(e)}")
+
+            self.progress.emit("Backup complete", 100)
+
+        except Exception as e:
+            self.error.emit(f"Backup error: {str(e)}")
+        finally:
+            self.finished.emit()
 
 def on_backup_clicked(main_window):
     logging.debug("on_backup_clicked triggered")
@@ -17,18 +59,10 @@ def on_backup_clicked(main_window):
         logging.error("\nNo adb connection detected : operation canceled")
         return 1
 
-    # Status bar
-    main_window.progress_dialog = QProgressDialog("Importing APK(s) ...", "Cancel", 0, 100, main_window)
-    main_window.progress_dialog.setModal(True)
-    main_window.progress_dialog.setValue(0)
-    main_window.progress_dialog.setWindowTitle("ADB pull")
-    main_window.progress_dialog.setCancelButtonText("Cancel")
-    main_window.progress_dialog.setWindowModality(Qt.WindowModal)
-    main_window.progress_dialog.show()
-
-    # 2 FORCE paint
-    main_window.progress_dialog.repaint()
-    QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+    # UI
+    pahc.set_progress_determinate(main_window)
+    pahc.set_progress_value(main_window, 0)
+    pahc.set_status(main_window, "Importing apk(s) from device ...")
 
     apk_dir = Path(__file__).parent / 'extracted_apks'
     backup_list = []
@@ -36,7 +70,7 @@ def on_backup_clicked(main_window):
     # Checking PackageMap instead of table
     for (pkg, vcode_int), info in main_window.package_map.get_all_packages().items():
         vcode = str(vcode_int)
-        is_checked = info.checked
+        is_checked = main_window.table_adapter.is_checked(pkg, vcode)
 
         # Filtering :
         # Excluding unchecked packages,
@@ -56,26 +90,26 @@ def on_backup_clicked(main_window):
 
     if not backup_list:
         logging.info("No package to import.")
-        main_window.progress_dialog.close()
         return
 
     # Lauching worker
-    main_window.worker = pahw.BackupWorker(backup_list, apk_dir)
-    main_window.worker.progress.connect(
-        lambda msg, percent: pahc.update_progress_dialog_percent(main_window, msg, percent))
+    main_window.worker = BackupWorker(backup_list, apk_dir)
+    main_window.worker.progress.connect(lambda msg,percent: (
+        pahc.set_status(main_window, msg),
+        pahc.set_progress_value(main_window, percent)
+        )
+    )
     main_window.worker.success.connect(
         lambda pkg_name_bak, vcode_bak: _mark_saved(main_window, pkg_name_bak, vcode_bak))
-    main_window.worker.finished.connect(main_window.progress_dialog.close)
-    main_window.worker.finished.connect(lambda: _clear_selection(main_window))
+    main_window.worker.finished.connect(
+        lambda: (
+            pahc.reset_progress(main_window),
+            QTimer.singleShot(0, main_window.table_adapter.clear_selection)
+        )
+    )
     main_window.worker.error.connect(
         lambda errmsg: pahc.on_action_failed(main_window, "Import", errmsg))
-    main_window.progress_dialog.canceled.connect(main_window.worker.request_cancel)
-    main_window.worker.cancelled.connect(main_window.progress_dialog.close)
     main_window.worker.start()
-
-    # 2 FORCE paint
-    main_window.progress_dialog.repaint()
-    QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
 
 def on_delete_clicked(main_window):
@@ -94,7 +128,7 @@ def on_delete_clicked(main_window):
     # Checking PackageMap instead of table
     for (pkg, vcode_int), info in list(pkg_map.get_all_packages().items()):
         vcode = str(vcode_int)
-        is_saved_and_checked = info.local and info.checked
+        is_saved_and_checked = info.local and main_window.table_adapter.is_checked(pkg, vcode)
         if is_saved_and_checked:
             fname = f"{pkg}_{vcode}.apk"
             # trying .apk
@@ -136,20 +170,19 @@ def on_delete_clicked(main_window):
                 f"\nInconsistent values for {pkg} vcode {vcode} :\nconsider android or local rescan")
             errcode = 2
 
-    _clear_selection(main_window)
+    main_window.table_adapter.clear_selection()
+    main_window.table_adapter.refresh()
     return errcode
-
 
 def _mark_saved(main_window, pkg: str, vcode: str) -> None:
     pkg_map = main_window.package_map
     info = pkg_map.get(pkg, vcode)
+
     if info:
         info.local = True
-    if hasattr(main_window, "table_adapter"):
-        main_window.table_adapter.refresh()
-    save_file = pkg_map.get_save_file_path()
-    pkg_map.save_to_file(save_file)
 
+    main_window.table_adapter.refresh()
+    pkg_map.save_to_file(pkg_map.get_save_file_path())
 
 def _mark_deleted(main_window, pkg: str, vcode: str) -> None:
     pkg_map = main_window.package_map
@@ -164,7 +197,6 @@ def _mark_deleted(main_window, pkg: str, vcode: str) -> None:
         main_window.table_adapter.refresh()
     save_file = pkg_map.get_save_file_path()
     pkg_map.save_to_file(save_file)
-
 
 # === APK Extraction related functions ===
 

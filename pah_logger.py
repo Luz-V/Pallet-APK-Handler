@@ -2,10 +2,14 @@
 import logging
 import colorlog
 
+########### LOG LEVEL ###########
+logging.root.setLevel(logging.DEBUG)
+
 # Define ANSI color
 GRAY = '\033[90m'
 RESET = '\033[0m'
 
+# handler colors
 handler = colorlog.StreamHandler()
 handler.setFormatter(colorlog.ColoredFormatter(
     fmt=f'{GRAY}[%(asctime)s]{RESET} : [%(log_color)s%(bold)s%(levelname)s{RESET}] '
@@ -21,6 +25,8 @@ handler.setFormatter(colorlog.ColoredFormatter(
     style='%'
 ))
 
+# Setup
 logging.root.handlers = []
-logging.root.setLevel(logging.DEBUG)
 logging.root.addHandler(handler)
+
+
