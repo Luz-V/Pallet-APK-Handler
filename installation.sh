@@ -87,6 +87,10 @@ run_as_root() {
 # Privilege escalation
 #------------------------------------------------------------------------------
 
+#------------------------------------------------------------------------------
+# Privilege escalation
+#------------------------------------------------------------------------------
+
 ensure_root() {
 
     if [[ "${EUID}" -eq 0 ]]; then
@@ -94,11 +98,9 @@ ensure_root() {
     fi
 
 
-    # Try sudo with current user
+    # Try current user sudo first
 
     if command -v sudo >/dev/null 2>&1; then
-
-        echo "Trying sudo privileges..."
 
         if sudo -v; then
             echo "Using sudo privileges..."
@@ -108,19 +110,12 @@ ensure_root() {
     fi
 
 
-    # Fallback to another administrative account
-
     echo
     echo "Current user cannot use sudo."
     echo "An administrator account is required."
     echo
 
     read -rp "Administrator account name: " ADMIN_USER
-
-    if [[ -z "$ADMIN_USER" ]]; then
-        echo "No administrator account provided."
-        exit 1
-    fi
 
 
     if ! id "$ADMIN_USER" >/dev/null 2>&1; then
@@ -129,32 +124,21 @@ ensure_root() {
     fi
 
 
-    # Root account
+    # Check that this account can use sudo
 
-    if [[ "$(id -u "$ADMIN_USER")" == "0" ]]; then
-
-        echo "Using root account '$ADMIN_USER'."
-
-        exec su - "$ADMIN_USER" -s /bin/bash -c \
-            "cd $(printf '%q' "$PROJECT_ROOT") && bash $(printf '%q' "$SCRIPT_PATH") --root"
-
+    if ! sudo -l -U "$ADMIN_USER" >/dev/null 2>&1; then
+        echo "Account '$ADMIN_USER' cannot use sudo."
+        exit 1
     fi
 
 
-    # Sudo account
-
-    if sudo -l -U "$ADMIN_USER" >/dev/null 2>&1; then
-
-        echo "Using sudo account '$ADMIN_USER'."
-
-        exec su - "$ADMIN_USER" -s /bin/bash -c \
-            "cd $(printf '%q' "$PROJECT_ROOT") && sudo bash $(printf '%q' "$SCRIPT_PATH") --root"
-
-    fi
+    echo "Using administrator account '$ADMIN_USER'."
 
 
-    echo "Account '$ADMIN_USER' cannot obtain administrator privileges."
-    exit 1
+    # Execute the script as this user, then escalate
+
+    exec sudo -u "$ADMIN_USER" -H bash -c \
+        "cd $(printf '%q' "$PROJECT_ROOT") && sudo -E bash $(printf '%q' "$SCRIPT_PATH") --root"
 }
 
 #------------------------------------------------------------------------------
