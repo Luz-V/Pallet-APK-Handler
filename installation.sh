@@ -111,30 +111,50 @@ ensure_root() {
     fi
 
 
-    # Fallback to su
+        # Fallback to another administrative account
+
     echo
-    echo "A root account is required."
+    echo "A privileged account is required."
     echo
 
-    read -rp "Root account name: " ROOT_USER
+    read -rp "Administrator account name: " ADMIN_USER
 
-    if [[ -z "$ROOT_USER" ]]; then
-        echo "No root account provided."
+    if [[ -z "$ADMIN_USER" ]]; then
+        echo "No administrator account provided."
         exit 1
     fi
 
 
-    uid="$(id -u "$ROOT_USER" 2>/dev/null || true)"
-
-    if [[ "$uid" != "0" ]]; then
-        echo "Account '$ROOT_USER' is not a root account."
+    if ! id "$ADMIN_USER" >/dev/null 2>&1; then
+        echo "Account '$ADMIN_USER' does not exist."
         exit 1
     fi
 
 
-    cmd=$(printf 'cd %q && bash %q --root' "$PROJECT_ROOT" "$SCRIPT_PATH")
+    # Root account
+    if [[ "$(id -u "$ADMIN_USER")" == "0" ]]; then
 
-    exec su - "$ROOT_USER" -s /bin/bash -c "$cmd"
+        echo "Using root account."
+
+        cmd=$(printf 'cd %q && bash %q --root' "$PROJECT_ROOT" "$SCRIPT_PATH")
+
+        exec su - "$ADMIN_USER" -s /bin/bash -c "$cmd"
+    fi
+
+
+    # Sudo-capable account
+    if groups "$ADMIN_USER" | grep -Eq '(^| )sudo( |$)'; then
+
+        echo "Using sudo-capable account '$ADMIN_USER'."
+
+        cmd=$(printf 'cd %q && bash %q --sudo-user' "$PROJECT_ROOT" "$SCRIPT_PATH")
+
+        exec su - "$ADMIN_USER" -s /bin/bash -c "$cmd"
+    fi
+
+
+    echo "Account '$ADMIN_USER' is neither root nor sudo-capable."
+    exit 1
 }
 
 #------------------------------------------------------------------------------
@@ -142,6 +162,17 @@ ensure_root() {
 #------------------------------------------------------------------------------
 
 case "${1:-}" in
+
+    --sudo-user)
+
+        if [[ "${EUID}" -eq 0 ]]; then
+            run_as_root
+            configure_project
+        else
+            echo "Error: sudo escalation failed."
+            exit 1
+        fi
+        ;;
 
     --root)
 
