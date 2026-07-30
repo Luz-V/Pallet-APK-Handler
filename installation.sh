@@ -98,11 +98,11 @@ ensure_root() {
     fi
 
 
-    # Try current user sudo first
+    # Try sudo with current user
 
     if command -v sudo >/dev/null 2>&1; then
 
-        if sudo -v; then
+        if sudo -n true 2>/dev/null; then
             echo "Using sudo privileges..."
             exec sudo -E bash "$SCRIPT_PATH" --root
         fi
@@ -115,6 +115,7 @@ ensure_root() {
     echo "An administrator account is required."
     echo
 
+
     read -rp "Administrator account name: " ADMIN_USER
 
 
@@ -124,21 +125,20 @@ ensure_root() {
     fi
 
 
-    # Check that this account can use sudo
+    if [[ "$(id -u "$ADMIN_USER")" == "0" ]]; then
 
-    if ! sudo -l -U "$ADMIN_USER" >/dev/null 2>&1; then
-        echo "Account '$ADMIN_USER' cannot use sudo."
-        exit 1
+        echo "Switching to root account '$ADMIN_USER'."
+
+        exec su - "$ADMIN_USER" -s /bin/bash -c \
+            "cd $(printf '%q' "$PROJECT_ROOT") && bash $(printf '%q' "$SCRIPT_PATH") --root"
+
     fi
 
 
-    echo "Using administrator account '$ADMIN_USER'."
+    echo "Switching to administrator account '$ADMIN_USER'."
 
-
-    # Execute the script as this user, then escalate
-
-    exec sudo -u "$ADMIN_USER" -H bash -c \
-        "cd $(printf '%q' "$PROJECT_ROOT") && sudo -E bash $(printf '%q' "$SCRIPT_PATH") --root"
+    exec su - "$ADMIN_USER" -s /bin/bash -c \
+        "cd $(printf '%q' "$PROJECT_ROOT") && sudo bash $(printf '%q' "$SCRIPT_PATH") --root"
 }
 
 #------------------------------------------------------------------------------
