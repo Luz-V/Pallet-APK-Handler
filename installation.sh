@@ -94,67 +94,45 @@ ensure_root() {
     fi
 
 
-    # Try current user sudo first
+    # Try sudo with current user
+
     if command -v sudo >/dev/null 2>&1; then
+
+        echo "Trying sudo privileges..."
 
         if sudo -v; then
             echo "Using sudo privileges..."
             exec sudo -E bash "$SCRIPT_PATH" --root
         fi
 
-        echo "Current user cannot use sudo."
     fi
 
 
-    # Ask for another administrative account
+    # Fallback to root account
 
     echo
-    echo "A privileged account is required."
+    echo "Current user cannot use sudo."
+    echo "A root account is required."
     echo
 
-    read -rp "Administrator account name: " ADMIN_USER
+    read -rp "Root account name: " ROOT_USER
 
-    if [[ -z "$ADMIN_USER" ]]; then
-        echo "No administrator account provided."
+    if [[ -z "$ROOT_USER" ]]; then
+        echo "No root account provided."
         exit 1
     fi
 
 
-    if ! id "$ADMIN_USER" >/dev/null 2>&1; then
-        echo "Account '$ADMIN_USER' does not exist."
+    if [[ "$(id -u "$ROOT_USER" 2>/dev/null || echo -1)" != "0" ]]; then
+        echo "Account '$ROOT_USER' is not a root account."
         exit 1
     fi
 
 
-    # Root account
+    echo "Switching to root account '$ROOT_USER'."
 
-    if [[ "$(id -u "$ADMIN_USER")" == "0" ]]; then
-
-        echo "Using root account '$ADMIN_USER'."
-
-        cmd=$(printf 'cd %q && bash %q --root' "$PROJECT_ROOT" "$SCRIPT_PATH")
-
-        exec su - "$ADMIN_USER" -s /bin/bash -c "$cmd"
-    fi
-
-
-    # Sudo-capable account
-
-
-    if command -v sudo >/dev/null 2>&1 && sudo -l -U "$ADMIN_USER" >/dev/null 2>&1; then
-
-        echo "Using sudo-capable account '$ADMIN_USER'."
-
-        exec su - "$ADMIN_USER" -s /bin/bash -c "
-            echo \"Current user after su: \$(whoami)\"
-            cd $(printf '%q' "$PROJECT_ROOT")
-            sudo bash $(printf '%q' "$SCRIPT_PATH") --root
-        "
-    fi
-
-
-    echo "Account '$ADMIN_USER' cannot provide administrator privileges."
-    exit 1
+    exec su - "$ROOT_USER" -s /bin/bash -c \
+        "cd $(printf '%q' "$PROJECT_ROOT") && bash $(printf '%q' "$SCRIPT_PATH") --root"
 }
 
 #------------------------------------------------------------------------------
