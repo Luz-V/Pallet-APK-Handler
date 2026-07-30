@@ -22,7 +22,15 @@ install_system_packages() {
         python3-venv \
         python3-pip \
         aapt \
-        p7zip-full
+        p7zip-full \
+        libxcb-xinerama0 \
+        libxcb-cursor0 \
+        libxkbcommon-x11-0 \
+        libxcb1 \
+        libxcb-render0 \
+        libxcb-shape0 \
+        libxcb-xfixes0 \
+        qt5-gtk-platformtheme
 
     command -v python3 >/dev/null
     command -v aapt >/dev/null
