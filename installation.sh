@@ -137,8 +137,7 @@ ensure_root() {
 
     echo "Switching to administrator account '$ADMIN_USER'."
 
-    exec su - "$ADMIN_USER" -s /bin/bash -c \
-        "cd $(printf '%q' "$PROJECT_ROOT") && sudo bash $(printf '%q' "$SCRIPT_PATH") --root"
+    exec su - "$ADMIN_USER" -s /bin/bash
 }
 
 #------------------------------------------------------------------------------
