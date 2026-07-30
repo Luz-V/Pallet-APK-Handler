@@ -144,9 +144,8 @@ ensure_root() {
 
         echo "Using sudo-capable account '$ADMIN_USER'."
 
-        cmd=$(printf 'cd %q && sudo -E bash %q --root' "$PROJECT_ROOT" "$SCRIPT_PATH")
-
-        exec su - "$ADMIN_USER" -s /bin/bash -c "$cmd"
+        exec su - "$ADMIN_USER" -s /bin/bash -c \
+            "cd $(printf '%q' "$PROJECT_ROOT") && sudo bash $(printf '%q' "$SCRIPT_PATH") --root"
     fi
 
 
