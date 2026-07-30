@@ -108,31 +108,53 @@ ensure_root() {
     fi
 
 
-    # Fallback to root account
+    # Fallback to another administrative account
 
     echo
     echo "Current user cannot use sudo."
-    echo "A root account is required."
+    echo "An administrator account is required."
     echo
 
-    read -rp "Root account name: " ROOT_USER
+    read -rp "Administrator account name: " ADMIN_USER
 
-    if [[ -z "$ROOT_USER" ]]; then
-        echo "No root account provided."
+    if [[ -z "$ADMIN_USER" ]]; then
+        echo "No administrator account provided."
         exit 1
     fi
 
 
-    if [[ "$(id -u "$ROOT_USER" 2>/dev/null || echo -1)" != "0" ]]; then
-        echo "Account '$ROOT_USER' is not a root account."
+    if ! id "$ADMIN_USER" >/dev/null 2>&1; then
+        echo "Account '$ADMIN_USER' does not exist."
         exit 1
     fi
 
 
-    echo "Switching to root account '$ROOT_USER'."
+    # Root account
 
-    exec su - "$ROOT_USER" -s /bin/bash -c \
-        "cd $(printf '%q' "$PROJECT_ROOT") && bash $(printf '%q' "$SCRIPT_PATH") --root"
+    if [[ "$(id -u "$ADMIN_USER")" == "0" ]]; then
+
+        echo "Using root account '$ADMIN_USER'."
+
+        exec su - "$ADMIN_USER" -s /bin/bash -c \
+            "cd $(printf '%q' "$PROJECT_ROOT") && bash $(printf '%q' "$SCRIPT_PATH") --root"
+
+    fi
+
+
+    # Sudo account
+
+    if sudo -l -U "$ADMIN_USER" >/dev/null 2>&1; then
+
+        echo "Using sudo account '$ADMIN_USER'."
+
+        exec su - "$ADMIN_USER" -s /bin/bash -c \
+            "cd $(printf '%q' "$PROJECT_ROOT") && sudo bash $(printf '%q' "$SCRIPT_PATH") --root"
+
+    fi
+
+
+    echo "Account '$ADMIN_USER' cannot obtain administrator privileges."
+    exit 1
 }
 
 #------------------------------------------------------------------------------
