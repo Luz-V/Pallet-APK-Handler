@@ -83,7 +83,7 @@ run_as_root() {
     install_system_packages
 }
 
-##------------------------------------------------------------------------------
+#------------------------------------------------------------------------------
 # Privilege escalation
 #------------------------------------------------------------------------------
 
@@ -94,15 +94,10 @@ ensure_root() {
     fi
 
 
-    # Try sudo first if available and authorized
+    # Try current user sudo first
     if command -v sudo >/dev/null 2>&1; then
 
-        if sudo -n true 2>/dev/null; then
-            echo "Using sudo privileges..."
-            exec sudo -E bash "$SCRIPT_PATH" --root
-        fi
-
-        if sudo -v 2>/dev/null; then
+        if sudo -v; then
             echo "Using sudo privileges..."
             exec sudo -E bash "$SCRIPT_PATH" --root
         fi
@@ -111,7 +106,7 @@ ensure_root() {
     fi
 
 
-        # Fallback to another administrative account
+    # Ask for another administrative account
 
     echo
     echo "A privileged account is required."
@@ -132,9 +127,10 @@ ensure_root() {
 
 
     # Root account
+
     if [[ "$(id -u "$ADMIN_USER")" == "0" ]]; then
 
-        echo "Using root account."
+        echo "Using root account '$ADMIN_USER'."
 
         cmd=$(printf 'cd %q && bash %q --root' "$PROJECT_ROOT" "$SCRIPT_PATH")
 
@@ -143,17 +139,18 @@ ensure_root() {
 
 
     # Sudo-capable account
-    if groups "$ADMIN_USER" | grep -Eq '(^| )sudo( |$)'; then
+
+    if command -v sudo >/dev/null 2>&1 && sudo -l -U "$ADMIN_USER" >/dev/null 2>&1; then
 
         echo "Using sudo-capable account '$ADMIN_USER'."
 
-        cmd=$(printf 'cd %q && bash %q --sudo-user' "$PROJECT_ROOT" "$SCRIPT_PATH")
+        cmd=$(printf 'cd %q && sudo -E bash %q --root' "$PROJECT_ROOT" "$SCRIPT_PATH")
 
         exec su - "$ADMIN_USER" -s /bin/bash -c "$cmd"
     fi
 
 
-    echo "Account '$ADMIN_USER' is neither root nor sudo-capable."
+    echo "Account '$ADMIN_USER' cannot provide administrator privileges."
     exit 1
 }
 
@@ -163,27 +160,15 @@ ensure_root() {
 
 case "${1:-}" in
 
-    --sudo-user)
-
-        if [[ "${EUID}" -eq 0 ]]; then
-            run_as_root
-            configure_project
-        else
-            echo "Error: sudo escalation failed."
-            exit 1
-        fi
-        ;;
-
     --root)
 
         run_as_root
         configure_project
         ;;
 
-
     *)
 
         ensure_root
-
         ;;
+
 esac
