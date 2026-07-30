@@ -140,12 +140,16 @@ ensure_root() {
 
     # Sudo-capable account
 
+
     if command -v sudo >/dev/null 2>&1 && sudo -l -U "$ADMIN_USER" >/dev/null 2>&1; then
 
         echo "Using sudo-capable account '$ADMIN_USER'."
 
-        exec su - "$ADMIN_USER" -s /bin/bash -c \
-            "cd $(printf '%q' "$PROJECT_ROOT") && sudo bash $(printf '%q' "$SCRIPT_PATH") --root"
+        exec su - "$ADMIN_USER" -s /bin/bash -c "
+            echo \"Current user after su: \$(whoami)\"
+            cd $(printf '%q' "$PROJECT_ROOT")
+            sudo bash $(printf '%q' "$SCRIPT_PATH") --root
+        "
     fi
 
 
