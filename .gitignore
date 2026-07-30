@@ -1,10 +1,9 @@
 __pycache__/
 .venv/
-/extracted_apks/android_extracted_list.txt
-/extracted_apks/*/
+/extracted_apks/*.txt
 /extracted_apks/*.apks
 /extracted_apks/*.apk
-/extracted_apks/packagemap.json
-!/extracted_apks/.gitkeep
+/extracted_apks/*.json
 .idea/
-
+/local/
+/local/*

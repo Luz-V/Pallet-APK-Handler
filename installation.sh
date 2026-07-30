@@ -83,7 +83,7 @@ run_as_root() {
     install_system_packages
 }
 
-#------------------------------------------------------------------------------
+##------------------------------------------------------------------------------
 # Privilege escalation
 #------------------------------------------------------------------------------
 
@@ -94,20 +94,25 @@ ensure_root() {
     fi
 
 
-    # Try sudo first
+    # Try sudo first if available and authorized
     if command -v sudo >/dev/null 2>&1; then
 
-        echo "Root privileges required. Requesting sudo access..."
+        if sudo -n true 2>/dev/null; then
+            echo "Using sudo privileges..."
+            exec sudo -E bash "$SCRIPT_PATH" --root
+        fi
 
-        sudo -v
+        if sudo -v 2>/dev/null; then
+            echo "Using sudo privileges..."
+            exec sudo -E bash "$SCRIPT_PATH" --root
+        fi
 
-        exec sudo -E bash "$SCRIPT_PATH" --root
+        echo "Current user cannot use sudo."
     fi
 
 
     # Fallback to su
     echo
-    echo "sudo is not available."
     echo "A root account is required."
     echo
 
